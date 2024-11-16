@@ -163,4 +163,5 @@ cython_debug/
 
 .tmp*
 # qm9 dataset
-qm9
+qm9/*.pt
+logs

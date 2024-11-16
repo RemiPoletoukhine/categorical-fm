@@ -1,4 +1,5 @@
 # As in Eijkelboom et al. (2024), taken from: https://github.com/cvignac/DiGress
+# Number of layers in Graph Transformer
 n_layers: 5
 # The input dimension of the model: 
 # X represents the number of atom's classes (5 as train_processed['atom_types'].shape = torch.Size([1761998, 5]))
@@ -7,10 +8,14 @@ n_layers: 5
 input_dims: {'X': 5, 'E': 4, 'y': 1}
 # The output dimension of the model: identical to the input dimension
 output_dims: {'X': 5, 'E': 4, 'y': 1}
-# Do not set hidden_mlp_E, dim_ffE too high, computing large tensors on the edges is costly
 hidden_mlp_dims: {'X': 256, 'E': 128, 'y': 128}
-# The dimensions should satisfy dx % n_head == 0
 hidden_dims : {'dx': 256, 'de': 64, 'dy': 64, 'n_head': 8, 'dim_ffX': 256, 'dim_ffE': 128, 'dim_ffy': 128}
-lambda_train: [5, 0]
-# batch size
-batch_size: 1
+# Training parameters
+n_epochs: 1000
+batch_size: 256 # originally, 512
+scheduler: cosine_annealing
+lr: 0.0002
+ema_decay: 0.999
+weight_decay: 1e-12
+optimizer: adamw
+seed: 0
