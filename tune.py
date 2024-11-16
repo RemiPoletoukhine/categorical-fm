@@ -46,7 +46,7 @@ def objective(
     optimizer_name = trial.suggest_categorical("optimizer", ["AdamW", "Adam", "RMSprop"])
     lr = 10 ** trial.suggest_float("log_lr", -5, -2)
     optimizer = getattr(optim, optimizer_name)(
-        model.parameters(), lr=lr, weight_decay=config['weight_decay']
+        model.parameters(), lr=lr, weight_decay=float(config['weight_decay'])
     )
     if config["scheduler"] == "cosine_annealing":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
