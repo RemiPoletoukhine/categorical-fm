@@ -42,12 +42,11 @@ def objective(
     Objective function for Optuna to optimize the hyperparameters of the model.
     """
     n_epochs = config["n_epochs_tuning"]
-    # tune the hyperparameters: optimizer, learning rate, weight decay
+    # tune the hyperparameters: optimizer and learning rate
     optimizer_name = trial.suggest_categorical("optimizer", ["AdamW", "Adam"])
-    weight_decay = trial.suggest_float("weight_decay", 0, 0.1)
     lr = 10 ** trial.suggest_float("log_lr", -5, -2)
     optimizer = getattr(optim, optimizer_name)(
-        model.parameters(), lr=lr, weight_decay=weight_decay
+        model.parameters(), lr=lr, weight_decay=config['weight_decay']
     )
     if config["scheduler"] == "cosine_annealing":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
