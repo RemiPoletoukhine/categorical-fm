@@ -43,7 +43,7 @@ def objective(
     """
     n_epochs = config["n_epochs_tuning"]
     # tune the hyperparameters: optimizer and learning rate
-    optimizer_name = trial.suggest_categorical("optimizer", ["AdamW", "Adam"])
+    optimizer_name = trial.suggest_categorical("optimizer", ["AdamW", "Adam", "RMSprop"])
     lr = 10 ** trial.suggest_float("log_lr", -5, -2)
     optimizer = getattr(optim, optimizer_name)(
         model.parameters(), lr=lr, weight_decay=config['weight_decay']
