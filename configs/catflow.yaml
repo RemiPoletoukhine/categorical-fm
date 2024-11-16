@@ -1,0 +1,25 @@
+# As in Eijkelboom et al. (2024), taken from: https://github.com/cvignac/DiGress
+# Number of layers in Graph Transformer
+n_layers: 5
+# The input dimension of the model: 
+# X represents the number of atom's classes (5 as train_processed['atom_types'].shape = torch.Size([1761998, 5]))
+# E represents the number of bond's classes (3 as train_processed['bond_types'].unique() = tensor([1, 2, 3]). Since we also model an absence of bond (edge), we have 4 classes)
+# y is irrelevant here, as we are not predicting any target, so we set it to 1.
+input_dims: {'X': 5, 'E': 4, 'y': 1}
+# The output dimension of the model: identical to the input dimension
+output_dims: {'X': 5, 'E': 4, 'y': 1}
+hidden_mlp_dims: {'X': 256, 'E': 128, 'y': 128}
+hidden_dims : {'dx': 256, 'de': 64, 'dy': 64, 'n_head': 8, 'dim_ffX': 256, 'dim_ffE': 128, 'dim_ffy': 128}
+# Training parameters
+n_epochs: 1000
+n_epochs_tuning: 5
+batch_size: 256 # originally, 512
+scheduler: cosine_annealing
+lr: 0.0002
+ema_decay: 0.999
+weight_decay: 1e-12
+optimizer: adamw
+seed: 0
+# Inference parameters
+# Number of nodes for the generated graphs
+n_nodes: 10
