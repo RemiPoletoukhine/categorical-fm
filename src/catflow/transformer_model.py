@@ -1,11 +1,11 @@
 import math
 import torch
 import torch.nn as nn
-from torch.nn.modules.dropout import Dropout
-from torch.nn.modules.linear import Linear
-from torch.nn.modules.normalization import LayerNorm
-from torch.nn import functional as F
 from torch import Tensor
+from torch.nn import functional as F
+from torch.nn.modules.linear import Linear
+from torch.nn.modules.dropout import Dropout
+from torch.nn.modules.normalization import LayerNorm
 
 
 """ NOTE: This code is directly taken from the DiGress repository: https://github.com/cvignac/DiGress """

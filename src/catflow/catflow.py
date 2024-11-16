@@ -1,7 +1,7 @@
 import torch
 import einops
 from torch import nn
-from torchdiffeq import odeint
+from zuko.utils import odeint
 from src.catflow.utils import timestep_embedding
 from src.catflow.transformer_model import GraphTransformer
 
@@ -26,17 +26,16 @@ class CatFlow(nn.Module):
         super(CatFlow, self).__init__()
         self.device = device
         self.backbone_model = GraphTransformer(
-            n_layers=config['n_layers'],
-            input_dims=config['input_dims'],
-            hidden_mlp_dims=config['hidden_mlp_dims'],
-            hidden_dims=config['hidden_dims'],
-            output_dims=config['output_dims'],
+            n_layers=config["n_layers"],
+            input_dims=config["input_dims"],
+            hidden_mlp_dims=config["hidden_mlp_dims"],
+            hidden_dims=config["hidden_dims"],
+            output_dims=config["output_dims"],
         ).to(self.device)
-        self.batch_size = config['batch_size']
-        self.num_classes_nodes = config['input_dims']['X']
-        self.num_classes_edges = config['input_dims']['E']
+        self.batch_size = config["batch_size"]
+        self.num_classes_nodes = config["input_dims"]["X"]
+        self.num_classes_edges = config["input_dims"]["E"]
         self.eps = eps
-        
 
     def sample_time(self, lambd: torch.tensor = torch.tensor([1.0])) -> torch.tensor:
         """
@@ -49,12 +48,16 @@ class CatFlow(nn.Module):
             torch.tensor: Time step. Shape: (batch_size,).
         """
         # As in Dirichlet Flow Matching, we sample the time step from Exp(1)
-        return torch.distributions.exponential.Exponential(lambd).sample().expand(self.batch_size)
+        return (
+            torch.distributions.exponential.Exponential(lambd)
+            .sample()
+            .expand(self.batch_size)
+        )
 
     def sample_noise(self, kind, num_nodes) -> torch.tensor:
         """
         Function to sample the noise for the CatFlow model.
-        
+
         Args:
             kind (str): Type of noise to sample. Options: 'node' or 'edge'.
 
@@ -62,15 +65,18 @@ class CatFlow(nn.Module):
             torch.tensor: Noise. Shape: (batch_size, num_nodes + (num_nodes - 1)**2, num_classes + 1).
         """
         # Judging by the page 7 of the paper: the noise is not constrained to the simplex; so we can sample from a normal distribution
-        if kind == 'node':
+        if kind == "node":
             return torch.randn(self.batch_size, num_nodes, self.num_classes_nodes)
-        elif kind == 'edge':
-            return torch.randn(self.batch_size, num_nodes, num_nodes, self.num_classes_edges)
+        elif kind == "edge":
+            return torch.randn(
+                self.batch_size, num_nodes, num_nodes, self.num_classes_edges
+            )
         else:
             raise ValueError(f"Invalid noise type: {kind}")
-    
-    
-    def forward(self, t: torch.tensor, x: torch.tensor, e: torch.tensor, node_mask: torch.tensor) -> torch.tensor:
+
+    def forward(
+        self, t: torch.tensor, x: torch.tensor, e: torch.tensor, node_mask: torch.tensor
+    ) -> torch.tensor:
         """
         Forward pass of the backbone model.
 
@@ -78,17 +84,21 @@ class CatFlow(nn.Module):
             t (torch.tensor): Time step. Shape: (batch_size,).
             x (torch.tensor): Node noise. Shape: (batch_size, num_nodes, num_classes_nodes).
             e (torch.tensor): Edge noise. Shape: (batch_size, num_nodes, num_nodes, num_classes_edges).
-            
+
 
         Returns:
             torch.tensor: Parameters of the variational distribution. Shape: (batch_size, num_nodes + (num_nodes - 1)^2, num_classes + 1).
         """
         # embed the timestep using the sinusoidal positional encoding
-        t_embedded_nodes = timestep_embedding(t, dim=x.shape[-1]) # Shape: (batch_size, num_classes_nodes)
-        t_embedded_edges = timestep_embedding(t, dim=e.shape[-1]) # Shape: (batch_size, num_classes_edges)
+        t_embedded_nodes = timestep_embedding(
+            t, dim=x.shape[-1]
+        )  # Shape: (batch_size, num_classes_nodes)
+        t_embedded_edges = timestep_embedding(
+            t, dim=e.shape[-1]
+        )  # Shape: (batch_size, num_classes_edges)
         # add time embedding to the input across the class feature dimension
-        x += einops.rearrange(t_embedded_nodes, 'b c -> b 1 c')
-        e += einops.rearrange(t_embedded_edges, 'b c -> b 1 1 c')
+        x += einops.rearrange(t_embedded_nodes, "b c -> b 1 c")
+        e += einops.rearrange(t_embedded_edges, "b c -> b 1 1 c")
 
         return self.backbone_model(
             X=x,
@@ -98,8 +108,9 @@ class CatFlow(nn.Module):
             node_mask=node_mask,
         )
 
-
-    def vector_field(self, t: torch.tensor, x: torch.tensor) -> torch.tensor:
+    def vector_field(
+        self, t: torch.tensor, x: torch.tensor, e: torch.tensor, node_mask: torch.tensor
+    ) -> torch.tensor:
         """
         Function that returns the vector field of the CatFlow model for a given timestamp.
 
@@ -110,21 +121,39 @@ class CatFlow(nn.Module):
         Returns:
             torch.tensor: Vector field. Shape: (batch_size, num_nodes + (num_nodes - 1)**2, num_classes + 1).
         """
+        # repeat the time step to match the shape of the input noise
+        t_expanded = t.expand(self.batch_size)
+        # prediction of the vector field at time t: forward pass of the backbone model
+        inferred_state = self.forward(t_expanded, x, e, node_mask)
+        node_repr = inferred_state.X
+        edge_repr = inferred_state.E
 
-        return (self.backbone_model(t, x) - x) / (1 - t)
+        node_vector_field = (node_repr - x) / (1 - t)
+        edge_vector_field = (edge_repr - e) / (1 - t)
 
-    def sampling(self, x: torch.tensor, x_0: float = 0.0, x_1: float = 0.95, steps: int = 20) -> torch.tensor:
+        return node_vector_field, edge_vector_field, node_mask
+
+    def sampling(
+        self,
+        init_state: tuple[torch.tensor, torch.tensor, torch.tensor],
+        t_0: float = 0.0,
+        t_1: float = 0.95,
+    ) -> tuple[torch.tensor, torch.tensor]:
         """
         Function to sample a new instance following the learned vector field.
 
         Args:
-            x (torch.tensor): Input noise. Shape: (batch_size, num_nodes + (num_nodes - 1)**2, num_classes + 1).
+            x (torch.tensor): Input node noise. Shape: (batch_size, num_nodes, num_classes + 1).
+            e (torch.tensor): Input edge noise. Shape: (batch_size, num_nodes, num_nodes, num_classes + 1).
 
         Returns:
             torch.tensor: Sampled result.
         """
-        # Define the time points over which to solve the ODE
-        time_points = torch.linspace(x_0, x_1, steps=steps)  # Adjust steps as needed
+        # Run the ODE solver to perform the integration of the vector field
+        final_state = odeint(
+            f=self.vector_field, x=init_state, t0=t_0, t1=t_1, phi=self.parameters()
+        )
+        # Separate the final node and edge representations
+        final_nodes, final_edges, _ = final_state
 
-        # Run the ODE solver with fixed time points
-        return odeint(self.vector_field, x, time_points)
+        return final_nodes, final_edges
