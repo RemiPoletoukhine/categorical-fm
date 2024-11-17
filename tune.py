@@ -71,6 +71,7 @@ def objective(
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()
 
+    return val_loss
 
 def hyperparam_tuning(
     objective,
@@ -104,7 +105,7 @@ def hyperparam_tuning(
         storage=f"sqlite:///optuna_logs/Trial_{datetime.now()}.sqlite3",
         study_name="CatFlow",
     )
-    study.optimize(objective, n_trials=100, timeout=36000)
+    study.optimize(objective, n_trials=100, timeout=150000)
 
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
     complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
