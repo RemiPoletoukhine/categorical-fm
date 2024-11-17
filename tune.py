@@ -54,23 +54,27 @@ def objective(
         )
     else:
         raise ValueError(f"Invalid scheduler: {config['scheduler']}")
+    try:
+        for epoch in range(n_epochs):
+            train_loss = train_epoch(
+                model, optimizer, train_dataloader, criterion, ema, device
+            )
+            val_loss = validate_epoch(model, val_dataloader, criterion, device)
+            scheduler.step()
+            logging.info(
+                f"Epoch {epoch + 1}/{n_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
+            )
+            # we report average validation loss to Optuna
+            trial.report(val_loss, epoch)
 
-    for epoch in range(n_epochs):
-        train_loss = train_epoch(
-            model, optimizer, train_dataloader, criterion, ema, device
-        )
-        val_loss = validate_epoch(model, val_dataloader, criterion, device)
-        scheduler.step()
-        logging.info(
-            f"Epoch {epoch + 1}/{n_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
-        )
-        # we report average validation loss to Optuna
-        trial.report(val_loss, epoch)
-
-        # Handle pruning based on the intermediate value.
-        if trial.should_prune():
-            raise optuna.exceptions.TrialPruned()
-
+            # Handle pruning based on the intermediate value.
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+    except Exception as e:
+        logging.error(f"Trial failed with exception: {e}")
+        # Mark the trial as pruned so Optuna skips it
+        raise optuna.exceptions.TrialPruned()
+    
     return val_loss
 
 def hyperparam_tuning(
