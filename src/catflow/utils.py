@@ -5,7 +5,7 @@ from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.utils import to_dense_adj, to_dense_batch, remove_self_loops
 
-
+""" NOTE: The code is mostly taken from the DiGress repository: https://github.com/cvignac/DiGress unless stated otherwise. """
 class PlaceHolder:
     def __init__(self, X, E, y):
         self.X = X

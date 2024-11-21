@@ -163,7 +163,7 @@ cython_debug/
 
 .tmp*
 # qm9 dataset
-qm9/*.pt
+data
 logs
 optuna_logs
 model_dicts
