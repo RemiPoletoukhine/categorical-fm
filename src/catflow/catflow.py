@@ -1,3 +1,4 @@
+import sys
 import torch
 import einops
 from torch import nn
@@ -76,13 +77,22 @@ class CatFlow(nn.Module):
 
         """
         # Judging by the page 7 of the paper: the noise is not constrained to the simplex; so we can sample from a normal distribution
-        sampled = utils.sample_normal(
-            torch.zeros_like(x),
-            torch.zeros_like(e),
-            torch.zeros_like(y),
-            torch.tensor([1]).unsqueeze(0).to(self.device),
-            node_mask,
-        )
+        # sampled = utils.sample_normal(
+        #     torch.zeros_like(x),
+        #     torch.zeros_like(e),
+        #     torch.zeros_like(y),
+        #     torch.tensor([1]).unsqueeze(0).to(self.device),
+        #     node_mask,
+        # )
+        # or from a uniform distribution on the simplex
+        x_0 = utils.sample_simplex(tuple(x.shape), device=self.device)
+        e_0 = utils.sample_simplex(tuple(e.shape), device=self.device)
+        y_0 = utils.sample_simplex(tuple(y.shape), device=self.device)
+        
+        # Symmetrize the edge features
+        e_0 = 0.5 * (e_0 + e_0.permute(0, 2, 1, 3))
+        
+        sampled = utils.PlaceHolder(X=x_0, E=e_0, y=y_0)
         return sampled
 
     def compute_extra_data(self, noisy_data: dict) -> utils.PlaceHolder:
@@ -153,9 +163,9 @@ class CatFlow(nn.Module):
     def vector_field(
         self,
         t: float,
-        X_0,
-        E_0,
-        y_0,
+        X_0: torch.tensor,
+        E_0: torch.tensor,
+        y_0: torch.tensor,
         node_mask: torch.tensor,
     ) -> torch.tensor:
         """
@@ -171,7 +181,8 @@ class CatFlow(nn.Module):
         Returns:
             torch.tensor: Vector field. Shape: (batch_size, num_nodes + (num_nodes - 1)**2, num_classes + 1).
         """
-        print(f"t: {t}")
+        # track progress of the integration. Unfortunately, that's the prettiest way (of the simpler ones) to do it
+        print(f"Current step: {t}")
         t_expanded = t.expand(X_0.shape[0])
         noisy_data = {
             "X_t": X_0,
@@ -231,18 +242,32 @@ class CatFlow(nn.Module):
         )
         node_mask = (arange < n_nodes.unsqueeze(1)).to(self.device)
         # Sample noise x_0, e_0, y_0
-        sampled = utils.sample_normal(
-            mu_X=torch.zeros(
-                (self.config["batch_size"], n_max, self.num_classes_nodes)
-            ).to(self.device),
-            mu_E=torch.zeros(
-                (self.config["batch_size"], n_max, n_max, self.num_classes_edges)
-            ).to(self.device),
-            mu_y=torch.zeros((self.config["batch_size"], 0)).to(self.device),
-            sigma=torch.tensor([1]).unsqueeze(0).to(self.device),
-            node_mask=node_mask,
+        # Either from a normal distribution
+        # sampled = utils.sample_normal(
+        #     mu_X=torch.zeros(
+        #         (self.config["batch_size"], n_max, self.num_classes_nodes)
+        #     ).to(self.device),
+        #     mu_E=torch.zeros(
+        #         (self.config["batch_size"], n_max, n_max, self.num_classes_edges)
+        #     ).to(self.device),
+        #     mu_y=torch.zeros((self.config["batch_size"], 0)).to(self.device),
+        #     sigma=torch.tensor([1]).unsqueeze(0).to(self.device),
+        #     node_mask=node_mask,
+        # )
+        # or from a uniform distribution on the simplex
+        x_0 = utils.sample_simplex(
+            (self.config["batch_size"], n_max, self.num_classes_nodes),
+            device=self.device,
         )
-        x_0, e_0, y_0 = sampled.X, sampled.E, sampled.y
+        e_0 = utils.sample_simplex(
+            (self.config["batch_size"], n_max, n_max, self.num_classes_edges),
+            device=self.device,
+        )
+        y_0 = utils.sample_simplex(
+            (self.config["batch_size"], 0), device=self.device
+        )
+        # Symmetrize the edge features
+        e_0 = 0.5 * (e_0 + e_0.permute(0, 2, 1, 3))
         # Run the ODE solver to perform the integration of the vector field
         final_state = odeint(
             f=partial(self.vector_field, node_mask=node_mask),

@@ -294,6 +294,7 @@ if __name__ == "__main__":
             optimizer = optim.AdamW(
                 model.parameters(),
                 lr=config["lr"],
+                amsgrad=True,
                 weight_decay=float(config["weight_decay"]),
             )
         else:

@@ -42,7 +42,7 @@ def objective(
     n_epochs = config["n_epochs_tuning"]
     # tune the hyperparameters: optimizer and learning rate
     optimizer_name = trial.suggest_categorical(
-        "optimizer", ["AdamW", "Adam", "RMSprop"]
+        "optimizer", ["AdamW", "Adam"]
     )
     lr = 10 ** trial.suggest_float("log_lr", -5, -2)
     optimizer = getattr(optim, optimizer_name)(
@@ -54,26 +54,21 @@ def objective(
         )
     else:
         raise ValueError(f"Invalid scheduler: {config['scheduler']}")
-    try:
-        for epoch in range(n_epochs):
-            train_loss = train_epoch(
-                model, optimizer, train_dataloader, criterion, ema, device
-            )
-            val_loss = validate_epoch(model, val_dataloader, criterion, device)
-            scheduler.step()
-            logger.info(
-                f"Epoch {epoch + 1}/{n_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
-            )
-            # we report average validation loss to Optuna
-            trial.report(val_loss, epoch)
+    for epoch in range(n_epochs):
+        train_loss = train_epoch(
+            model, optimizer, train_dataloader, criterion, ema, device
+        )
+        val_loss = validate_epoch(model, val_dataloader, criterion, device)
+        scheduler.step()
+        logger.info(
+            f"Epoch {epoch + 1}/{n_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
+        )
+        # we report average validation loss to Optuna
+        trial.report(val_loss, epoch)
 
-            # Handle pruning based on the intermediate value.
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
-    except Exception as e:
-        logger.error(f"Trial failed with exception: {e}")
-        # Mark the trial as pruned so Optuna skips it
-        raise optuna.exceptions.TrialPruned()
+        # Handle pruning based on the intermediate value.
+        if trial.should_prune():
+            raise optuna.exceptions.TrialPruned()
 
     return val_loss
 

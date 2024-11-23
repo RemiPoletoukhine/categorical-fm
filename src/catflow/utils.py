@@ -179,6 +179,20 @@ def sample_normal(mu_X, mu_E, mu_y, sigma, node_mask):
     y = mu_y + sigma.squeeze(1) * eps.y
     return PlaceHolder(X=X, E=E, y=y)
 
+# From https://github.com/ccr-cheng/statistical-flow-matching
+def sample_simplex(*sizes, device='cpu', eps=1e-4):
+    """
+    Uniformly sample from a simplex.
+    :param sizes: sizes of the Tensor to be returned
+    :param device: device to put the Tensor on
+    :param eps: small float to avoid instability
+    :return: Tensor of shape sizes, with values summing to 1
+    """
+    x = torch.empty(*sizes, device=device, dtype=torch.float).exponential_(1)
+    p = x / x.sum(dim=-1, keepdim=True)
+    p = p.clamp(eps, 1 - eps)
+    return p / p.sum(dim=-1, keepdim=True)
+
 
 def get_writer(log_dir: str = f"logs/{datetime.now()}") -> SummaryWriter:
     """
