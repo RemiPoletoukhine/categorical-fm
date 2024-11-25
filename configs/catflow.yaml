@@ -10,7 +10,7 @@ n_epochs: 1000
 n_epochs_tuning: 5
 batch_size: 256 # originally, 512
 scheduler: cosine_annealing
-lr: 0.0005 # originally, 0.0002
+lr: 0.0002 # originally, 0.0002
 ema_decay: 0.999
 weight_decay: 1e-12
 optimizer: adamw

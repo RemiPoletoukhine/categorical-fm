@@ -167,3 +167,4 @@ data
 logs
 optuna_logs
 model_dicts
+generated

@@ -1,5 +1,7 @@
+import os
 import yaml
 import torch
+import datetime
 import numpy as np
 from train import load_qm9
 from logger import set_logger
@@ -22,16 +24,16 @@ if __name__ == "__main__":
     device = get_device()
     logger.info(f"Device used: {device}")
     # Prepare the qm9 dataset
-    datamodule, dataset_infos, domain_features = load_qm9(qm9_config)
+    datamodule, dataset_infos, extra_features, domain_features = load_qm9(qm9_config)
     dataset_infos.compute_input_output_dims(
-        datamodule=datamodule, domain_features=domain_features
+        datamodule=datamodule, extra_features=extra_features, domain_features=domain_features
     )
 
     # loading the model. Currently, loads CatFlow always.
-    model = CatFlow(config, dataset_infos, domain_features, device).to(device)
+    model = CatFlow(config, dataset_infos, extra_features, domain_features, device).to(device)
     # load the trained weights and set the model to evaluation mode
     model.load_state_dict(
-        torch.load("model_dicts/catflow_best_2310.pt", weights_only=True)
+        torch.load("model_dicts/catflow_best.pt", weights_only=True)
     )
     logger.info("Model loaded successfully.")
     model.eval()
@@ -66,29 +68,45 @@ if __name__ == "__main__":
         abs_unique_ratio.append(val_res["abs_unique_ratio"])
         valid_ratio.append(val_res["valid_ratio"])
         n_valid = len(val_res["valid_mols"])
+        
+        logger.info(
+            f"Generated {n_valid} valid molecules out of {nodes_repr.shape[0]}."
+        )
+        
+        # Save the generated molecules
+        os.makedirs("generated", exist_ok=True)
+        np.save(f"generated/graphs_{i}_{datetime.datetime.now()}.npy", nodes_repr.detach().cpu().numpy())
+        np.save(f"generated/edges_{i}_{datetime.datetime.now()}.npy", edges_repr.detach().cpu().numpy())
+        logger.info(f"Generated molecules saved for iteration {i}.")
+        # Log the current statistics
+        logger.info(
+            f"validity: mean={np.mean(valid_ratio):.2f}%"
+        )
+        logger.info(
+            f"novelty: mean={np.mean(novel_ratio):.2f}%"
+        )
+        logger.info(
+            f"uniqueness: mean={np.mean(unique_ratio):.2f}%"
+        )
+        logger.info(
+            f"abs_novelty: mean={np.mean(abs_novel_ratio):.2f}%"
+        )
+        logger.info(
+            f"abs_uniqueness: mean={np.mean(abs_unique_ratio):.2f}%"
+        )
 
     logger.info(
-        "validity: mean={:.2f}%, sd={:.2f}%, vals={}".format(
-            np.mean(valid_ratio), np.std(valid_ratio), valid_ratio
-        )
+        f"validity: mean={np.mean(valid_ratio):.2f}%, sd={np.std(valid_ratio):.2f}%, vals={valid_ratio}"
     )
     logger.info(
-        "novelty: mean={:.2f}%, sd={:.2f}%, vals={}".format(
-            np.mean(novel_ratio), np.std(novel_ratio), novel_ratio
-        )
+        f"novelty: mean={np.mean(novel_ratio):.2f}%, sd={np.std(novel_ratio):.2f}%, vals={novel_ratio}"
     )
     logger.info(
-        "uniqueness: mean={:.2f}%, sd={:.2f}%, vals={}".format(
-            np.mean(unique_ratio), np.std(unique_ratio), unique_ratio
-        )
+        f"uniqueness: mean={np.mean(unique_ratio):.2f}%, sd={np.std(unique_ratio):.2f}%, vals={unique_ratio}"
     )
     logger.info(
-        "abs_novelty: mean={:.2f}%, sd={:.2f}%, vals={}".format(
-            np.mean(abs_novel_ratio), np.std(abs_novel_ratio), abs_novel_ratio
-        )
+        f"abs_novelty: mean={np.mean(abs_novel_ratio):.2f}%, sd={np.std(abs_novel_ratio):.2f}%, vals={abs_novel_ratio}"
     )
     logger.info(
-        "abs_uniqueness: mean={:.2f}%, sd={:.2f}%, vals={}".format(
-            np.mean(abs_unique_ratio), np.std(abs_unique_ratio), abs_unique_ratio
-        )
+        f"abs_uniqueness: mean={np.mean(abs_unique_ratio):.2f}%, sd={np.std(abs_unique_ratio):.2f}%, vals={abs_unique_ratio}"
     )

@@ -4,7 +4,7 @@ from rdkit import Chem
 from rdkit.Chem import Draw
 import re
 
-# NOTE: Heavily based on https://github.com/calvin-zcx/moflow
+# NOTE: Heavily based on (slightly adapted from) https://github.com/calvin-zcx/moflow
 
 # Updated decoders and valency dictionary
 atom_decoder_m = {0: 6, 1: 7, 2: 8, 3: 9}

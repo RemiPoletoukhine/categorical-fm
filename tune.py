@@ -9,7 +9,6 @@ from logger import set_logger
 from datetime import datetime
 from functools import partial
 import torch.optim as optim
-import torch.nn as nn
 import optuna
 import torch
 import yaml
@@ -147,9 +146,9 @@ if __name__ == "__main__":
     device = get_device()
     logger.info(f"Device used: {device}")
     # Prepare the qm9 dataset and dataloaders
-    datamodule, dataset_infos, domain_features = load_qm9(qm9_config)
+    datamodule, dataset_infos, extra_features, domain_features = load_qm9(qm9_config)
     dataset_infos.compute_input_output_dims(
-        datamodule=datamodule, domain_features=domain_features
+        datamodule=datamodule, extra_features=extra_features, domain_features=domain_features
     )
     train_dataloader = datamodule.train_dataloader()
     val_dataloader = datamodule.val_dataloader()
