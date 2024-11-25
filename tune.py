@@ -122,7 +122,7 @@ def hyperparam_tuning(
         storage=f"sqlite:///optuna_logs/Trial_{datetime.now()}.sqlite3",
         study_name="CatFlow",
     )
-    study.optimize(objective, n_trials=100, timeout=150000)
+    study.optimize(objective, n_trials=250, timeout=50000)
 
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
     complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
