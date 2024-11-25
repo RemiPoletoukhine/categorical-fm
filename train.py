@@ -72,7 +72,7 @@ def step_forward(
     if optimizer:
         optimizer.zero_grad()
     # CatFlow forward pass:
-    # Step 1: Sample t ~ U[0, 1], x ~ N(0, I), e ~ N(0, I)
+    # Step 1: Sample t ~ U[0, 1], x, e ~ limit distribution
     t = model.sample_time(batch_size).to(device)
     z_0 = sample_discrete_feature_noise(limit_dist=model.limit_dist, node_mask=node_mask)
     x_0, e_0, y_0 = z_0.X.to(device), z_0.E.to(device), z_0.y.to(device)

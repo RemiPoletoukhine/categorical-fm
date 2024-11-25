@@ -41,12 +41,20 @@ def objective(
     n_epochs = config["n_epochs_tuning"]
     # tune the hyperparameters: optimizer and learning rate
     optimizer_name = trial.suggest_categorical(
-        "optimizer", ["AdamW", "Adam"]
+        "optimizer", ["AdamW", "Adam", "RMSprop"]
     )
     lr = 10 ** trial.suggest_float("log_lr", -5, -2)
-    optimizer = getattr(optim, optimizer_name)(
-        model.parameters(), lr=lr, weight_decay=float(config["weight_decay"])
-    )
+    if optimizer_name != "AdamW":
+        optimizer = getattr(optim, optimizer_name)(
+            model.parameters(), lr=lr, weight_decay=float(config["weight_decay"])
+        )
+    else:
+        optimizer = optim.AdamW(
+                model.parameters(),
+                lr=lr,
+                amsgrad=True,
+                weight_decay=float(config["weight_decay"]),
+        )
     if config["scheduler"] == "cosine_annealing":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=n_epochs
