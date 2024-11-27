@@ -1,0 +1,8 @@
+name: 'qm9'
+datadir: 'qm9/'
+remove_h: True
+random_subset: null
+pin_memory: False
+batch_size: 256
+num_workers: 0
+extra_features: 'all'

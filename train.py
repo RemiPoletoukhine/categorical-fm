@@ -1,8 +1,10 @@
-from src.catflow.utils import to_dense, get_device, get_writer, EarlyStopper
+from src.catflow.utils import to_dense, get_device, get_writer, EarlyStopper, PlaceHolder
 from src.catflow.dataset import create_dataloader
 from torch_ema import ExponentialMovingAverage
 from torch_geometric.loader import DataLoader
-from src.catflow.catflow import CatFlow
+from src.dirichletFlow.flow_utils import sample_cond_prob_path
+from src.dirichletFlow.dirichlet import DirichletFlow
+from src.metrics.metrics import TrainLossDiscrete
 from datetime import datetime
 import torch.optim as optim
 from tqdm import tqdm
@@ -12,67 +14,151 @@ import logging
 import torch
 import yaml
 import os
+import torch_geometric
 
-# Configure logging
-os.makedirs("code_logs", exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,  # Set the logging level
-    format="%(asctime)s - %(levelname)s - %(message)s",  # Format for log messages
-    handlers=[
-        logging.StreamHandler(),  # Log to console
-        logging.FileHandler(
-            f"code_logs/training_{datetime.now()}.log", mode="w"
-        ),  # Log to a file
-    ],
-)
+from src.qm9.extra_features_molecular import ExtraMolecularFeatures
+from src.qm9 import qm9_dataset
+from logger import set_logger
 
 
-def prepare_dataloaders(
-    batch_size: int,
-    path_to_train: str = "qm9/train_data_processed.pt",
-    path_to_val: str = "qm9/val_data_processed.pt",
-) -> tuple[DataLoader, DataLoader]:
+def load_qm9(qm9_config):
+    datamodule = qm9_dataset.QM9DataModule(qm9_config)
+    dataset_infos = qm9_dataset.QM9infos(datamodule=datamodule, cfg=qm9_config)
+    domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos)
 
-    # Load your processed data
-    train_data = torch.load(path_to_train, weights_only=True)
-    val_data = torch.load(path_to_val, weights_only=True)
+    return datamodule, dataset_infos, domain_features
 
-    # Create the DataLoaders
-    train_dataloader = create_dataloader(train_data, batch_size=batch_size)
-    val_dataloader = create_dataloader(val_data, batch_size=batch_size)
+# def prepare_dataloaders(
+#     batch_size: int,
+#     path_to_train: str = "qm9/train_data_processed.pt",
+#     path_to_val: str = "qm9/val_data_processed.pt",
+# ) -> tuple[DataLoader, DataLoader]:
 
-    return train_dataloader, val_dataloader
+#     # Load your processed data
+#     train_data = torch.load(path_to_train, weights_only=True)
+#     val_data = torch.load(path_to_val, weights_only=True)
+
+#     # Create the DataLoaders
+#     train_dataloader = create_dataloader(train_data, batch_size=batch_size)
+#     val_dataloader = create_dataloader(val_data, batch_size=batch_size)
+
+#     return train_dataloader, val_dataloader
 
 
-def train_epoch(model, optimizer, dataloader, criterion, ema, device):
+def step_forward(
+    model: DirichletFlow,
+    optimizer: torch.optim.Optimizer,
+    data,
+    criterion: TrainLossDiscrete,
+    device: torch.device,
+):
+    """
+    Perform a forward pass of the model and compute the loss.
+
+    Args:
+        model (CatFlow): The model to train.
+        optimizer (torch.optim.Optimizer): The optimizer to use.
+        data: The batch to train on.
+        criterion (TrainLossDiscrete): The loss function to use.
+        device (torch.device): The device to use.
+
+    """
+    if data.edge_index.numel() == 0:
+        logger.info("Found a batch with no edges. Skipping.")
+        return
+    data = data.to(device)
+    batch_size = len(data)
+    # Get the dense representation of the graph
+    dense_data, node_mask = to_dense(
+        data.x, data.edge_index, data.edge_attr, data.batch
+    )
+    dense_data = dense_data.mask(node_mask)
+    x_1, e_1, node_mask = (
+        dense_data.X.to(device),
+        dense_data.E.to(device),
+        node_mask.to(device),
+    )
+    y_1 = data.y.to(device)
+    # Zero the gradients if training
+    if optimizer:
+        optimizer.zero_grad()
+    # CatFlow forward pass:
+    # Step 1: Sample t ~ U[0, 1], x ~ N(0, I), e ~ N(0, I)
+    x_t,t = sample_cond_prob_path(x_1, config["n_node_classes"])  
+    B,l,l,n = e_1.shape
+    e_1 = e_1.reshape(B,l*l,n)
+    e_t, _ = sample_cond_prob_path(e_1, config["n_edge_classes"])
+    e_t = e_t.reshape(B,l,l,n)
+    # t = model.sample_time(batch_size)
+    # sampled = model.sample_noise(x=x_1, e=e_1, y=data.y, node_mask=node_mask)
+    # x_0, e_0, y_0 = sampled.X.to(device), sampled.E.to(device), sampled.y.to(device)
+    # Step 2: Compute noisy data x_t from the sampled noise x_0 using linearity assumption
+    # tau_y, tau_x, tau_e = (
+    #     einops.rearrange(t, "b -> b 1"),
+    #     einops.rearrange(t, "b -> b 1 1"),
+    #     einops.rearrange(t, "b -> b 1 1 1"),
+    # )
+    # x_t = tau_x * x_1 + (1 - tau_x) * x_0
+    # e_t = tau_e * e_1 + (1 - tau_e) * e_0
+    # y_t = tau_y * y_1 + (1 - tau_y) * y_0
+    # Perform masking
+    z_t = PlaceHolder(X=x_t, E=e_t, y=y_1).type_as(x_t).mask(node_mask)
+    noisy_data = {
+        "X_t": z_t.X,
+        "E_t": z_t.E,
+        "y_t": z_t.y,
+        "node_mask": node_mask.type(torch.bool),
+        "t": t,
+    }
+    # compute the extra molecular features
+    extra_data = model.compute_extra_data(noisy_data=noisy_data)
+    # Step 3: Forward pass of the graph transformer
+    theta_pred = model.forward(
+        t=t, noisy_data=noisy_data, extra_data=extra_data, node_mask=node_mask
+    )
+    # Step 4: Calculate the loss
+    loss = criterion(
+        masked_pred_X=theta_pred.X,
+        masked_pred_E=theta_pred.E,
+        pred_y=theta_pred.y,
+        true_X=x_1,
+        true_E=e_1,
+        true_y=y_1,
+        log=False,
+    )
+
+    return loss
+
+
+
+def train_epoch(
+    model: DirichletFlow,
+    optimizer: torch.optim.Optimizer,
+    dataloader: torch_geometric.loader.dataloader.DataLoader,
+    criterion: TrainLossDiscrete,
+    ema: ExponentialMovingAverage,
+    device: torch.device,
+):
+    """
+    Train the model for one epoch.
+
+    Args:
+        model (CatFlow): The model to train.
+        optimizer (torch.optim.Optimizer): The optimizer to use.
+        dataloader (torch_geometric.loader.DataLoader): The dataloader to use.
+        criterion (TrainLossDiscrete): The loss function to use.
+        ema (ExponentialMovingAverage): The EMA to use.
+        device (torch.device): The device to use.
+    """
     model.train()
     total_loss = 0
     for data in tqdm(dataloader):
-        data = data.to(device)
-        # Get the dense representation of the graph
-        dense_data, node_mask = to_dense(
-            data.x, data.edge_index, data.edge_attr, data.batch
-        )
-        x_true, e_true = dense_data.X.to(device), dense_data.E.to(device)
-        node_mask = node_mask.to(device)
-        num_nodes = x_true.size(1)
-        # Zero the gradients
-        optimizer.zero_grad()
-        # CatFlow forward pass
-        # Step 1: Sample t ~ Exp(1), x ~ N(0, I), e ~ N(0, I)
-        t = model.sample_time().to(device)
-        x = model.sample_noise(kind="node", num_nodes=num_nodes).to(device)
-        e = model.sample_noise(kind="edge", num_nodes=num_nodes).to(device)
-        # Step 2: Forward pass of the graph transformer
-        inferred = model.forward(t=t, x=x, e=e, node_mask=node_mask)
-        # Step 3: Calculate the loss
-        loss = criterion(inferred.X, x_true.float()) + criterion(
-            inferred.E, e_true.float()
-        )
-        # Step 4: Backward pass
+        # Steps 1-4: Forward pass
+        loss = step_forward(model, optimizer, data, criterion, device)
+        # Step 5: Backward pass
         loss.backward()
         optimizer.step()
-        # Step 5: Update the EMA
+        # Step 6: Update the EMA
         ema.update()
 
         total_loss += loss.item()
@@ -85,38 +171,20 @@ def validate_epoch(model, dataloader, criterion, device):
     total_loss = 0
     with torch.no_grad():
         for data in tqdm(dataloader):
-            data = data.to(device)
-            # Get the dense representation of the graph
-            dense_data, node_mask = to_dense(
-                data.x, data.edge_index, data.edge_attr, data.batch
-            )
-            x_true, e_true = dense_data.X.to(device), dense_data.E.to(device)
-            node_mask = node_mask.to(device)
-            num_nodes = x_true.size(1)
-            # CatFlow forward pass
-            # Step 1: Sample t ~ Exp(1), x ~ N(0, I), e ~ N(0, I)
-            t = model.sample_time().to(device)
-            x = model.sample_noise(kind="node", num_nodes=num_nodes).to(device)
-            e = model.sample_noise(kind="edge", num_nodes=num_nodes).to(device)
-            # Step 2: Forward pass of the graph transformer
-            inferred = model.forward(t=t, x=x, e=e, node_mask=node_mask)
-            # Step 3: Calculate the loss
-            loss = criterion(inferred.X, x_true.float()) + criterion(
-                inferred.E, e_true.float()
-            )
+            loss = step_forward(model, None, data, criterion, device)
             total_loss += loss.item()
 
     return total_loss / len(dataloader)
 
 
+
 def training(
-    model: CatFlow,
+    model: DirichletFlow,
     optimizer: optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.CosineAnnealingLR,
     criterion: nn.Module,
     ema: ExponentialMovingAverage,
-    train_dataloader: DataLoader,
-    val_dataloader: DataLoader,
+    datamodule: qm9_dataset.QM9DataModule,
     device: torch.device,
     config: dict,
 ) -> None:
@@ -128,6 +196,12 @@ def training(
             "ce_loss": ["Multiline", ["loss/train", "loss/validation"]],
         },
     }
+
+    train_dataloader = datamodule.train_dataloader()
+    val_dataloader = datamodule.val_dataloader()
+    len_train_dataloader = len(train_dataloader)
+    len_val_dataloader = len(val_dataloader)
+
     writer.add_custom_scalars(layout)
     min_val_loss = float("inf")
     # initialise early stopper
@@ -139,13 +213,13 @@ def training(
         writer.add_scalar(
             f"loss/train",
             train_loss,
-            (epoch + 1) * len(train_dataloader),
+            (epoch + 1) * len_train_dataloader,
         )
         val_loss = validate_epoch(model, val_dataloader, criterion, device)
         writer.add_scalar(
             f"loss/validation",
             val_loss,
-            (epoch + 1) * len(train_dataloader) + len(val_dataloader),
+            (epoch + 1) * len_train_dataloader + len_val_dataloader,
         )
         logging.info(
             f"Epoch {epoch + 1}/{config['n_epochs']}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
@@ -159,7 +233,7 @@ def training(
             best_epoch = epoch
             # Save the model
             os.makedirs("model_dicts", exist_ok=True)
-            torch.save(model.state_dict(), f"model_dicts/catflow_best.pt")
+            torch.save(model.state_dict(), f"model_dicts/dirichletFlow_best.pt")
         # early stopping if the validation loss does not decrease
         if early_stopper.early_stop(val_loss):
             logging.info("Early stopping triggered.")
@@ -173,6 +247,7 @@ def training(
 
 
 def inference(model, config, device):
+    # TODO add dirichlet_flow_inference from dna_module.py
     # Step 1: x ~ N(0, I), e ~ N(0, I) and initialize the node mask
     x = model.sample_noise(kind="node", num_nodes=config["n_nodes"]).to(device)
     e = model.sample_noise(kind="edge", num_nodes=config["n_nodes"]).to(device)
@@ -186,62 +261,70 @@ def inference(model, config, device):
 
 
 if __name__ == "__main__":
+    logger = set_logger("train")
     # read the config file
     config = yaml.safe_load(open("configs/catflow.yaml", "r"))
+    # read the qm9 config file
+    qm9_config = yaml.safe_load(open("configs/qm9.yaml", "r"))
     # set the device
     device = get_device()
-    # Define the model
-    model = CatFlow(config, device).to(device)
-
-    parser = argparse.ArgumentParser("catflow_script")
-    parser.add_argument(
-        "mode", help="1: inference mode, other int: training mode", type=int
+    logger.info(f"Device used: {device}")
+    # Prepare the qm9 dataset
+    datamodule, dataset_infos, domain_features = load_qm9(qm9_config)
+    dataset_infos.compute_input_output_dims(
+        datamodule=datamodule, domain_features=domain_features
     )
-    args = parser.parse_args()
-    if args.mode:
-        start = datetime.now()
-        logging.info("Starting the generation of the graphs.")
-        nodes_repr, edges_repr = inference(model, config, device)
-        os.makedirs("generated_graphs", exist_ok=True)
-        torch.save(nodes_repr, "generated_graphs/nodes_repr.pt")
-        torch.save(edges_repr, "generated_graphs/edges_repr.pt")
-        logging.info(
-            f"Graphs generated successfully in: {datetime.now() - start} seconds."
+    # Define the model
+    model = DirichletFlow(config,dataset_infos, domain_features, device).to(device)
+
+    # parser = argparse.ArgumentParser("catflow_script")
+    # parser.add_argument(
+    #     "mode", help="1: inference mode, other int: training mode", type=int
+    # )
+    # args = parser.parse_args()
+    #if args.mode:
+        # start = datetime.now()
+        # logging.info("Starting the generation of the graphs.")
+        # nodes_repr, edges_repr = inference(model, config, device)
+        # os.makedirs("generated_graphs", exist_ok=True)
+        # torch.save(nodes_repr, "generated_graphs/nodes_repr.pt")
+        # torch.save(edges_repr, "generated_graphs/edges_repr.pt")
+        # logging.info(
+        #     f"Graphs generated successfully in: {datetime.now() - start} seconds."
+        # )
+    #else:
+    #logging.info("Starting the training.")
+    # Define the optimizer, scheduler and loss function
+    logger.info("Starting the training.")
+    if config["optimizer"] == "adamw":
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=config["lr"],
+            weight_decay=float(config["weight_decay"]),
         )
     else:
-        logging.info("Starting the training.")
-        # Define the optimizer, scheduler and loss function
-        if config["optimizer"] == "adamw":
-            optimizer = optim.AdamW(
-                model.parameters(),
-                lr=config["lr"],
-                weight_decay=float(config["weight_decay"]),
-            )
-        else:
-            raise ValueError(f"Invalid optimizer: {config['optimizer']}")
-        if config["scheduler"] == "cosine_annealing":
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=config["n_epochs"]
-            )
-        else:
-            raise ValueError(f"Invalid scheduler: {config['scheduler']}")
-        criterion = nn.BCEWithLogitsLoss()
-        # Define the EMA
-        ema = ExponentialMovingAverage(model.parameters(), decay=config["ema_decay"])
-
-        # set the seed
-        torch.manual_seed(config["seed"])
-        # prepare the dataloaders
-        train_dataloader, val_dataloader = prepare_dataloaders(config["batch_size"])
-        # train the model
-        _ = training(
-            model,
-            optimizer,
-            scheduler,
-            criterion,
-            ema,
-            train_dataloader,
-            val_dataloader,
-            device,
-            config,
+        raise ValueError(f"Invalid optimizer: {config['optimizer']}")
+    if config["scheduler"] == "cosine_annealing":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=config["n_epochs"]
         )
+    else:
+        raise ValueError(f"Invalid scheduler: {config['scheduler']}")
+    criterion = TrainLossDiscrete(lambda_train=config["lambda_train"]).to(device)
+    # Define the EMA
+    ema = ExponentialMovingAverage(model.parameters(), decay=config["ema_decay"])
+
+    # set the seed
+    torch.manual_seed(config["seed"])
+
+    # train the model
+    _ = training(
+        model,
+        optimizer,
+        scheduler,
+        criterion,
+        ema,
+        datamodule,
+        device,
+        config,
+    )

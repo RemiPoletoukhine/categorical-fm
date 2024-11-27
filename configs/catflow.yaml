@@ -1,13 +1,8 @@
 # As in Eijkelboom et al. (2024), taken from: https://github.com/cvignac/DiGress
 # Number of layers in Graph Transformer
 n_layers: 5
-# The input dimension of the model: 
-# X represents the number of atom's classes (5 as train_processed['atom_types'].shape = torch.Size([1761998, 5]))
-# E represents the number of bond's classes (3 as train_processed['bond_types'].unique() = tensor([1, 2, 3]). Since we also model an absence of bond (edge), we have 4 classes)
-# y is irrelevant here, as we are not predicting any target, so we set it to 1.
-input_dims: {'X': 5, 'E': 4, 'y': 1}
-# The output dimension of the model: identical to the input dimension
-output_dims: {'X': 5, 'E': 4, 'y': 1}
+# The number of classes and hidden dimension of the model: 
+num_classes: {'X': 4, 'E': 5, 'y': 1}
 hidden_mlp_dims: {'X': 256, 'E': 128, 'y': 128}
 hidden_dims : {'dx': 256, 'de': 64, 'dy': 64, 'n_head': 8, 'dim_ffX': 256, 'dim_ffE': 128, 'dim_ffy': 128}
 # Training parameters
@@ -22,4 +17,8 @@ optimizer: adamw
 seed: 0
 # Inference parameters
 # Number of nodes for the generated graphs
-n_nodes: 10
+n_nodes: 3
+# Weights for the loss function
+lambda_train: [5, 0]
+n_node_classes: 4
+n_edge_classes: 5

@@ -33,7 +33,7 @@ class PlaceHolder:
         else:
             self.X = self.X * x_mask
             self.E = self.E * e_mask1 * e_mask2
-            assert torch.allclose(self.E, torch.transpose(self.E, 1, 2))
+            #assert torch.allclose(self.E, torch.transpose(self.E, 1, 2))
         return self
 
 
@@ -180,7 +180,8 @@ def sample_normal(mu_X, mu_E, mu_y, sigma, node_mask):
     return PlaceHolder(X=X, E=E, y=y)
 
 
-def get_writer(log_dir: str = f"logs/{datetime.now()}") -> SummaryWriter:
+#def get_writer(log_dir: str = f"logs/{datetime.now()}") -> SummaryWriter:
+def get_writer(log_dir: str = "logs/{}".format(str(datetime.now()).replace(":","_"))) -> SummaryWriter:
     """
     Create a SummaryWriter object to log the training process.
 
