@@ -17,6 +17,7 @@ import os
 import torch_geometric
 
 from src.qm9.extra_features_molecular import ExtraMolecularFeatures
+from src.qm9.extra_features import ExtraFeatures
 from src.qm9 import qm9_dataset
 from logger import set_logger
 
@@ -24,10 +25,10 @@ from logger import set_logger
 def load_qm9(qm9_config):
     datamodule = qm9_dataset.QM9DataModule(qm9_config)
     dataset_infos = qm9_dataset.QM9infos(datamodule=datamodule, cfg=qm9_config)
+    extra_features = ExtraFeatures('all', dataset_info=dataset_infos)
     domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos)
 
-    return datamodule, dataset_infos, domain_features
-
+    return datamodule, dataset_infos, extra_features, domain_features
 # def prepare_dataloaders(
 #     batch_size: int,
 #     path_to_train: str = "qm9/train_data_processed.pt",
@@ -270,9 +271,9 @@ if __name__ == "__main__":
     device = get_device()
     logger.info(f"Device used: {device}")
     # Prepare the qm9 dataset
-    datamodule, dataset_infos, domain_features = load_qm9(qm9_config)
+    datamodule, dataset_infos, extra_features, domain_features = load_qm9(qm9_config)
     dataset_infos.compute_input_output_dims(
-        datamodule=datamodule, domain_features=domain_features
+        datamodule=datamodule, extra_features=extra_features,domain_features=domain_features
     )
     # Define the model
     model = DirichletFlow(config,dataset_infos, domain_features, device).to(device)

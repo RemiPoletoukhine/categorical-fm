@@ -118,7 +118,7 @@ class MolecularDataModule(AbstractDataModule):
                 valencies[valency.long().item()] += 1
         valencies = valencies / valencies.sum()
         return valencies
-
+    
 
 class AbstractDatasetInfos:
     def complete_infos(self, n_nodes, node_types):
@@ -128,15 +128,21 @@ class AbstractDatasetInfos:
         self.max_n_nodes = len(n_nodes) - 1
         self.nodes_dist = DistributionNodes(n_nodes)
 
-    def compute_input_output_dims(self, datamodule, domain_features):
+    def compute_input_output_dims(self, datamodule, extra_features, domain_features):
         example_batch = next(iter(datamodule.train_dataloader()))
         ex_dense, node_mask = utils.to_dense(example_batch.x, example_batch.edge_index, example_batch.edge_attr,
                                              example_batch.batch)
-        example_data = {'X_t': ex_dense.X, 'E_t': ex_dense.E, 'y_t': example_batch['y'], 'node_mask': node_mask.type(torch.bool)}
+        example_data = {'X_t': ex_dense.X, 'E_t': ex_dense.E, 'y_t': example_batch['y'], 'node_mask': node_mask}
 
         self.input_dims = {'X': example_batch['x'].size(1),
                            'E': example_batch['edge_attr'].size(1),
                            'y': example_batch['y'].size(1) + 1}      # + 1 due to time conditioning
+        
+        # Not actually using extra_features
+        # ex_extra_feat = extra_features(example_data)
+        # self.input_dims['X'] += ex_extra_feat.X.size(-1)
+        # self.input_dims['E'] += ex_extra_feat.E.size(-1)
+        # self.input_dims['y'] += ex_extra_feat.y.size(-1)
 
         ex_extra_molecular_feat = domain_features(example_data)
         self.input_dims['X'] += ex_extra_molecular_feat.X.size(-1)
