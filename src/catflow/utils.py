@@ -2,10 +2,13 @@ import math
 import torch
 import shutil
 from datetime import datetime
+from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.utils import to_dense_adj, to_dense_batch, remove_self_loops
 
 """ NOTE: The code is mostly taken from the DiGress repository: https://github.com/cvignac/DiGress unless stated otherwise. """
+
+
 class PlaceHolder:
     def __init__(self, X, E, y):
         self.X = X
@@ -178,6 +181,52 @@ def sample_normal(mu_X, mu_E, mu_y, sigma, node_mask):
     E = mu_E + sigma.unsqueeze(1) * eps.E
     y = mu_y + sigma.squeeze(1) * eps.y
     return PlaceHolder(X=X, E=E, y=y)
+
+
+# From https://github.com/ccr-cheng/statistical-flow-matching
+def sample_simplex(*sizes, device="cpu", eps=1e-4):
+    """
+    Uniformly sample from a simplex.
+    :param sizes: sizes of the Tensor to be returned
+    :param device: device to put the Tensor on
+    :param eps: small float to avoid instability
+    :return: Tensor of shape sizes, with values summing to 1
+    """
+    x = torch.empty(*sizes, device=device, dtype=torch.float).exponential_(1)
+    p = x / x.sum(dim=-1, keepdim=True)
+    p = p.clamp(eps, 1 - eps)
+    return p / p.sum(dim=-1, keepdim=True)
+
+
+def sample_discrete_feature_noise(limit_dist, node_mask):
+    """Sample from the limit distribution of the diffusion process"""
+    bs, n_max = node_mask.shape
+    x_limit = limit_dist.X[None, None, :].expand(bs, n_max, -1)
+    e_limit = limit_dist.E[None, None, None, :].expand(bs, n_max, n_max, -1)
+    y_limit = limit_dist.y[None, :].expand(bs, -1)
+    U_X = x_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max)
+    U_E = e_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max, n_max)
+    U_y = torch.empty((bs, 0))
+
+    long_mask = node_mask.long()
+    U_X = U_X.type_as(long_mask)
+    U_E = U_E.type_as(long_mask)
+    U_y = U_y.type_as(long_mask)
+
+    U_X = F.one_hot(U_X, num_classes=x_limit.shape[-1]).float()
+    U_E = F.one_hot(U_E, num_classes=e_limit.shape[-1]).float()
+
+    # Get upper triangular part of edge noise, without main diagonal
+    upper_triangular_mask = torch.zeros_like(U_E)
+    indices = torch.triu_indices(row=U_E.size(1), col=U_E.size(2), offset=1)
+    upper_triangular_mask[:, indices[0], indices[1], :] = 1
+
+    U_E = U_E * upper_triangular_mask
+    U_E = U_E + torch.transpose(U_E, 1, 2)
+
+    assert (U_E == torch.transpose(U_E, 1, 2)).all()
+
+    return PlaceHolder(X=U_X, E=U_E, y=U_y).mask(node_mask)
 
 
 def get_writer(log_dir: str = f"logs/{datetime.now()}") -> SummaryWriter:

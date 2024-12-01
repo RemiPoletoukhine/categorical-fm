@@ -2,11 +2,13 @@ from src.catflow.utils import (
     to_dense,
     get_device,
     get_writer,
+    sample_discrete_feature_noise,
     EarlyStopper,
     PlaceHolder,
 )
 from src.qm9.extra_features_molecular import ExtraMolecularFeatures
 from src.metrics.metrics import TrainLossDiscrete
+from src.qm9.extra_features import ExtraFeatures
 from torch_ema import ExponentialMovingAverage
 from src.catflow.catflow import CatFlow
 from src.qm9 import qm9_dataset
@@ -26,9 +28,10 @@ import os
 def load_qm9(qm9_config):
     datamodule = qm9_dataset.QM9DataModule(qm9_config)
     dataset_infos = qm9_dataset.QM9infos(datamodule=datamodule, cfg=qm9_config)
+    extra_features = ExtraFeatures('all', dataset_info=dataset_infos)
     domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos)
 
-    return datamodule, dataset_infos, domain_features
+    return datamodule, dataset_infos, extra_features, domain_features
 
 
 def step_forward(
@@ -69,15 +72,15 @@ def step_forward(
     if optimizer:
         optimizer.zero_grad()
     # CatFlow forward pass:
-    # Step 1: Sample t ~ U[0, 1], x ~ N(0, I), e ~ N(0, I)
-    t = model.sample_time(batch_size)
-    sampled = model.sample_noise(x=x_1, e=e_1, y=data.y, node_mask=node_mask)
-    x_0, e_0, y_0 = sampled.X.to(device), sampled.E.to(device), sampled.y.to(device)
+    # Step 1: Sample t ~ U[0, 1], x, e ~ limit distribution
+    t = model.sample_time(batch_size).to(device)
+    z_0 = sample_discrete_feature_noise(limit_dist=model.limit_dist, node_mask=node_mask)
+    x_0, e_0, y_0 = z_0.X.to(device), z_0.E.to(device), z_0.y.to(device)
     # Step 2: Compute noisy data x_t from the sampled noise x_0 using linearity assumption
     tau_y, tau_x, tau_e = (
-        einops.rearrange(t, "b -> b 1"),
-        einops.rearrange(t, "b -> b 1 1"),
-        einops.rearrange(t, "b -> b 1 1 1"),
+        einops.rearrange(t, "a -> a 1"),
+        einops.rearrange(t, "a -> a 1 1"),
+        einops.rearrange(t, "a -> a 1 1 1"),
     )
     x_t = tau_x * x_1 + (1 - tau_x) * x_0
     e_t = tau_e * e_1 + (1 - tau_e) * e_0
@@ -95,7 +98,7 @@ def step_forward(
     extra_data = model.compute_extra_data(noisy_data=noisy_data)
     # Step 3: Forward pass of the graph transformer
     theta_pred = model.forward(
-        t=t, noisy_data=noisy_data, extra_data=extra_data, node_mask=node_mask
+        noisy_data=noisy_data, extra_data=extra_data, node_mask=node_mask
     )
     # Step 4: Calculate the loss
     loss = criterion(
@@ -264,11 +267,11 @@ if __name__ == "__main__":
     device = get_device()
     logger.info(f"Device used: {device}")
     # Prepare the qm9 dataset
-    datamodule, dataset_infos, domain_features = load_qm9(qm9_config)
+    datamodule, dataset_infos, extra_features, domain_features = load_qm9(qm9_config)
     dataset_infos.compute_input_output_dims(
-        datamodule=datamodule, domain_features=domain_features
+        datamodule=datamodule, extra_features=extra_features, domain_features=domain_features
     )
-    # Define the model
+    # Define the model without the extra features
     model = CatFlow(config, dataset_infos, domain_features, device).to(device)
 
     parser = argparse.ArgumentParser("catflow_script")
@@ -294,6 +297,7 @@ if __name__ == "__main__":
             optimizer = optim.AdamW(
                 model.parameters(),
                 lr=config["lr"],
+                amsgrad=True,
                 weight_decay=float(config["weight_decay"]),
             )
         else:

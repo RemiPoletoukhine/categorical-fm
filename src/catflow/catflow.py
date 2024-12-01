@@ -1,6 +1,6 @@
 import torch
-import einops
 from torch import nn
+from torch.nn import functional as F
 from functools import partial
 from zuko.utils import odeint
 from src.qm9 import qm9_dataset
@@ -43,7 +43,15 @@ class CatFlow(nn.Module):
         ).to(self.device)
         self.num_classes_nodes = config["num_classes"]["X"]
         self.num_classes_edges = config["num_classes"]["E"]
+        self.Xdim_output = self.dataset_info.output_dims["X"]
+        self.Edim_output = self.dataset_info.output_dims["E"]
+        self.ydim_output = self.dataset_info.output_dims["y"]
         self.eps = eps
+        # Limit distribution for the noise
+        x_limit = torch.ones(self.Xdim_output) / self.Xdim_output
+        e_limit = torch.ones(self.Edim_output) / self.Edim_output
+        y_limit = torch.ones(self.ydim_output) / self.ydim_output
+        self.limit_dist = utils.PlaceHolder(X=x_limit, E=e_limit, y=y_limit)
 
     def sample_time(self, batch_size) -> torch.tensor:
         """
@@ -55,61 +63,22 @@ class CatFlow(nn.Module):
         Returns:
             torch.tensor: Time step. Shape: (batch_size,).
         """
-        # We sample the time from U[0, 1 - eps] as in Flow Matching for Generative Modeling by Yaron Lipman et al.
-        # source: https://github.com/gle-bellier/flow-matching
-        return (
-            (torch.rand(1) + torch.arange(batch_size) / batch_size) % (1 - self.eps)
-        ).to(self.device)
+        return torch.rand(batch_size).to(self.device)
 
-    def sample_noise(self, x, e, y, node_mask) -> utils.PlaceHolder:
-        """
-        Function to sample the noise for the CatFlow model.
-
-        Args:
-            x (torch.tensor): Node features, only for the shape. Shape: (batch_size, num_nodes, num_node_classes).
-            e (torch.tensor): Edge features, only for the shape. Shape: (batch_size, num_nodes, num_nodes, num_edge_classes).
-            y (torch.tensor): Global features, only for the shape. Shape: (batch_size, y_emb).
-            node_mask (torch.tensor): Node mask. Shape: (batch_size, num_nodes).
-
-        Returns:
-            utils.PlaceHolder: Extra data to append to the network input. Keys: 'X', 'E', 'y'. Values: torch.tensor.
-
-        """
-        # Judging by the page 7 of the paper: the noise is not constrained to the simplex; so we can sample from a normal distribution
-        sampled = utils.sample_normal(
-            torch.zeros_like(x),
-            torch.zeros_like(e),
-            torch.zeros_like(y),
-            torch.tensor([1]).unsqueeze(0).to(self.device),
-            node_mask,
-        )
-        return sampled
-
-    def compute_extra_data(self, noisy_data: dict) -> utils.PlaceHolder:
-        """
-        Function to compute extra information and append to the network input at every training step (after adding noise)
-
-        Args:
-            noisy_data (dict): Noisy data. Keys: 'X_t', 'E_t', 'y_t', 't', 'node_mask'. Values: torch.tensor.
-
-        Returns:
-            utils.PlaceHolder: Extra data to append to the network input. Keys: 'X', 'E', 'y'. Values: torch.tensor.
-        """
+    def compute_extra_data(self, noisy_data):
+        """At every training step (after adding noise) and step in sampling, compute extra information and append to
+        the network input."""
 
         extra_molecular_features = self.domain_features(noisy_data)
-
-        extra_X = extra_molecular_features.X
-        extra_E = extra_molecular_features.E
-        extra_y = extra_molecular_features.y
-
         t = noisy_data["t"].unsqueeze(-1)
-        extra_y = torch.cat((extra_y, t), dim=1)
+        extra_y = torch.cat((extra_molecular_features.y, t), dim=1)
 
-        return utils.PlaceHolder(X=extra_X, E=extra_E, y=extra_y)
+        return utils.PlaceHolder(
+            X=extra_molecular_features.X, E=extra_molecular_features.E, y=extra_y
+        )
 
     def forward(
         self,
-        t: torch.tensor,
         noisy_data: dict,
         extra_data: utils.PlaceHolder,
         node_mask: torch.tensor,
@@ -118,7 +87,6 @@ class CatFlow(nn.Module):
         Forward pass of the backbone model.
 
         Args:
-            t (torch.tensor): Time step. Shape: (batch_size,).
             noisy_data (dict): Noisy data. Keys: 'X_t', 'E_t', 'y_t'. Values: torch.tensor.
             extra_data (utils.PlaceHolder): Extra data to append to the network input. Keys: 'X', 'E', 'y'. Values: torch.tensor.
             node_mask (torch.tensor): Node mask. Shape: (batch_size, num_nodes).
@@ -131,18 +99,6 @@ class CatFlow(nn.Module):
         e = torch.cat((noisy_data["E_t"], extra_data.E), dim=3).float()
         y = torch.hstack((noisy_data["y_t"], extra_data.y)).float()
 
-        # embed the timestep using the sinusoidal positional encoding
-        t_embedded_nodes = utils.timestep_embedding(
-            t, dim=x.shape[-1]
-        )  # Shape: (batch_size, num_classes_nodes)
-        t_embedded_edges = utils.timestep_embedding(
-            t, dim=e.shape[-1]
-        )  # Shape: (batch_size, num_classes_edges)
-
-        # add time embedding to the input across the class feature dimension
-        x += einops.rearrange(t_embedded_nodes, "b c -> b 1 c")
-        e += einops.rearrange(t_embedded_edges, "b c -> b 1 1 c")
-
         return self.backbone_model(
             X=x,
             E=e,
@@ -153,9 +109,9 @@ class CatFlow(nn.Module):
     def vector_field(
         self,
         t: float,
-        X_0,
-        E_0,
-        y_0,
+        X_0: torch.tensor,
+        E_0: torch.tensor,
+        y_0: torch.tensor,
         node_mask: torch.tensor,
     ) -> torch.tensor:
         """
@@ -171,7 +127,8 @@ class CatFlow(nn.Module):
         Returns:
             torch.tensor: Vector field. Shape: (batch_size, num_nodes + (num_nodes - 1)**2, num_classes + 1).
         """
-        print(f"t: {t}")
+        # track progress of the integration. Unfortunately, that's the prettiest way (of the simpler ones) to do it
+        print(f"Current step: {t}")
         t_expanded = t.expand(X_0.shape[0])
         noisy_data = {
             "X_t": X_0,
@@ -183,7 +140,7 @@ class CatFlow(nn.Module):
         extra_data = self.compute_extra_data(noisy_data=noisy_data)
 
         # prediction of the vector field at time t: forward pass of the backbone model
-        inferred_state = self.forward(t_expanded, noisy_data, extra_data, node_mask)
+        inferred_state = self.forward(noisy_data, extra_data, node_mask)
 
         node_repr = inferred_state.X
         edge_repr = inferred_state.E
@@ -229,20 +186,12 @@ class CatFlow(nn.Module):
             .unsqueeze(0)
             .expand(self.config["batch_size"], -1)
         )
-        node_mask = (arange < n_nodes.unsqueeze(1)).to(self.device)
-        # Sample noise x_0, e_0, y_0
-        sampled = utils.sample_normal(
-            mu_X=torch.zeros(
-                (self.config["batch_size"], n_max, self.num_classes_nodes)
-            ).to(self.device),
-            mu_E=torch.zeros(
-                (self.config["batch_size"], n_max, n_max, self.num_classes_edges)
-            ).to(self.device),
-            mu_y=torch.zeros((self.config["batch_size"], 0)).to(self.device),
-            sigma=torch.tensor([1]).unsqueeze(0).to(self.device),
-            node_mask=node_mask,
+        node_mask = arange < n_nodes.unsqueeze(1)
+        # Sample the starting noise
+        z_0 = utils.sample_discrete_feature_noise(
+            limit_dist=self.limit_dist, node_mask=node_mask
         )
-        x_0, e_0, y_0 = sampled.X, sampled.E, sampled.y
+        x_0, e_0, y_0 = z_0.X, z_0.E, z_0.y
         # Run the ODE solver to perform the integration of the vector field
         final_state = odeint(
             f=partial(self.vector_field, node_mask=node_mask),

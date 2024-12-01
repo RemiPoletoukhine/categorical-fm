@@ -9,7 +9,6 @@ from logger import set_logger
 from datetime import datetime
 from functools import partial
 import torch.optim as optim
-import torch.nn as nn
 import optuna
 import torch
 import yaml
@@ -45,35 +44,38 @@ def objective(
         "optimizer", ["AdamW", "Adam", "RMSprop"]
     )
     lr = 10 ** trial.suggest_float("log_lr", -5, -2)
-    optimizer = getattr(optim, optimizer_name)(
-        model.parameters(), lr=lr, weight_decay=float(config["weight_decay"])
-    )
+    if optimizer_name != "AdamW":
+        optimizer = getattr(optim, optimizer_name)(
+            model.parameters(), lr=lr, weight_decay=float(config["weight_decay"])
+        )
+    else:
+        optimizer = optim.AdamW(
+                model.parameters(),
+                lr=lr,
+                amsgrad=True,
+                weight_decay=float(config["weight_decay"]),
+        )
     if config["scheduler"] == "cosine_annealing":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=n_epochs
         )
     else:
         raise ValueError(f"Invalid scheduler: {config['scheduler']}")
-    try:
-        for epoch in range(n_epochs):
-            train_loss = train_epoch(
-                model, optimizer, train_dataloader, criterion, ema, device
-            )
-            val_loss = validate_epoch(model, val_dataloader, criterion, device)
-            scheduler.step()
-            logger.info(
-                f"Epoch {epoch + 1}/{n_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
-            )
-            # we report average validation loss to Optuna
-            trial.report(val_loss, epoch)
+    for epoch in range(n_epochs):
+        train_loss = train_epoch(
+            model, optimizer, train_dataloader, criterion, ema, device
+        )
+        val_loss = validate_epoch(model, val_dataloader, criterion, device)
+        scheduler.step()
+        logger.info(
+            f"Epoch {epoch + 1}/{n_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
+        )
+        # we report average validation loss to Optuna
+        trial.report(val_loss, epoch)
 
-            # Handle pruning based on the intermediate value.
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
-    except Exception as e:
-        logger.error(f"Trial failed with exception: {e}")
-        # Mark the trial as pruned so Optuna skips it
-        raise optuna.exceptions.TrialPruned()
+        # Handle pruning based on the intermediate value.
+        if trial.should_prune():
+            raise optuna.exceptions.TrialPruned()
 
     return val_loss
 
@@ -120,7 +122,7 @@ def hyperparam_tuning(
         storage=f"sqlite:///optuna_logs/Trial_{datetime.now()}.sqlite3",
         study_name="CatFlow",
     )
-    study.optimize(objective, n_trials=100, timeout=150000)
+    study.optimize(objective, n_trials=250, timeout=50000)
 
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
     complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
@@ -152,9 +154,9 @@ if __name__ == "__main__":
     device = get_device()
     logger.info(f"Device used: {device}")
     # Prepare the qm9 dataset and dataloaders
-    datamodule, dataset_infos, domain_features = load_qm9(qm9_config)
+    datamodule, dataset_infos, extra_features, domain_features = load_qm9(qm9_config)
     dataset_infos.compute_input_output_dims(
-        datamodule=datamodule, domain_features=domain_features
+        datamodule=datamodule, extra_features=extra_features, domain_features=domain_features
     )
     train_dataloader = datamodule.train_dataloader()
     val_dataloader = datamodule.val_dataloader()
