@@ -199,3 +199,26 @@ def get_writer(log_dir: str = f"logs/{datetime.now()}") -> SummaryWriter:
     writer = SummaryWriter(log_dir)
 
     return writer
+
+def get_writer_windows(log_dir: str = f"logs/{datetime.now()}") -> SummaryWriter:
+    """
+    Create a SummaryWriter object to log the training process.
+
+    Args:
+        log_dir (str): The directory to save the logs.
+
+    Returns:
+        SummaryWriter: The SummaryWriter object.
+    """
+    # Remove colons from log directory
+    log_dir = log_dir.replace(':', '')
+
+    # Remove (potentially already existing) plots from the TensorBoard
+    try:
+        shutil.rmtree(log_dir)
+    except FileNotFoundError:
+        pass
+    # Create a SummaryWriter object
+    writer = SummaryWriter(log_dir)
+
+    return writer
