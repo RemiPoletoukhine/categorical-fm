@@ -293,19 +293,19 @@ class GraphStatFlow(nn.Module, ABC):
         e_extra = torch.cat((noisy_data["E_t"], extra_data.E), dim=3).float()
         y_extra = torch.hstack((noisy_data["y_t"], extra_data.y)).float()
 
-        # embed the timestep using the sinusoidal positional encoding
-        t_embedded_nodes = timestep_embedding(
-            t, dim=x_extra.shape[-1]
-        )  # Shape: (batch_size, num_classes_nodes)
-        t_embedded_edges = timestep_embedding(
-            t, dim=e_extra.shape[-1]
-        )  # Shape: (batch_size, num_classes_edges)
+        # # embed the timestep using the sinusoidal positional encoding
+        # t_embedded_nodes = timestep_embedding(
+        #     t, dim=x_extra.shape[-1]
+        # )  # Shape: (batch_size, num_classes_nodes)
+        # t_embedded_edges = timestep_embedding(
+        #     t, dim=e_extra.shape[-1]
+        # )  # Shape: (batch_size, num_classes_edges)
 
         # print(t_embedded_nodes.size(), "t_embedded_nodes")
         # print(t_embedded_edges.size(), "t_embedded_edges")
         # add time embedding to the input across the class feature dimension
-        x_extra += einops.rearrange(t_embedded_nodes, "b c -> b 1 c")
-        e_extra += einops.rearrange(t_embedded_edges, "b c -> b 1 1 c")
+        # x_extra += einops.rearrange(t_embedded_nodes, "b c -> b 1 c")
+        # e_extra += einops.rearrange(t_embedded_edges, "b c -> b 1 1 c")
 
 
         return PlaceHolder(X=x_extra, E=e_extra, y=y_extra)
@@ -324,7 +324,7 @@ class GraphStatFlow(nn.Module, ABC):
 
         # Interpolant with molecular features is returned
         pt_mol = self.pre_forward(t, pt, node_mask)
-        pt_mol.mask(node_mask)
+        # pt_mol.mask(node_mask) # TODO: Remove
         ph_vf = self.encoder(pt_mol.X, pt_mol.E, pt_mol.y, node_mask)
         # print(ph_vf.X.size())
         # print(ph_vf.E.size())

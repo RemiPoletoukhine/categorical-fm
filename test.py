@@ -179,8 +179,13 @@ def train_epoch(
         # Steps 1-4: Forward pass
         try:
             loss = model.get_loss(data, logger, device, None)
-        except AssertionError:
+        except AssertionError as e:
+            torch.save(model.state_dict(), 'fuckedmodel.pt')
             torch.save(data, 'fuckedbatch.pt')
+            import sys
+            print('\nAssertion failed. Error:', e)
+            sys.exit(1)
+
         # Step 5: Backward pass
         loss.backward()
         optimizer.step()
