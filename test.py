@@ -47,6 +47,7 @@ from src.catflow.utils import (
 )
 from src.qm9.extra_features_molecular import ExtraMolecularFeatures
 from src.metrics.metrics import TrainLossDiscrete
+from src.qm9.extra_features import ExtraFeatures
 from torch_ema import ExponentialMovingAverage
 from src.catflow.catflow import CatFlow
 from src.qm9 import qm9_dataset
@@ -68,9 +69,10 @@ from src.catflow.statflow import GraphStatFlow, GraphStatFlow_Simplex
 def load_qm9(qm9_config):
     datamodule = qm9_dataset.QM9DataModule(qm9_config)
     dataset_infos = qm9_dataset.QM9infos(datamodule=datamodule, cfg=qm9_config)
+    extra_features = ExtraFeatures('all', dataset_info=dataset_infos)
     domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos)
 
-    return datamodule, dataset_infos, domain_features
+    return datamodule, dataset_infos, extra_features, domain_features
 
 
 def step_forward(
@@ -175,7 +177,10 @@ def train_epoch(
     total_loss = 0
     for data in tqdm(dataloader):
         # Steps 1-4: Forward pass
-        loss = model.get_loss(data, logger, device, None)
+        try:
+            loss = model.get_loss(data, logger, device, None)
+        except AssertionError:
+            torch.save(data, 'fuckedbatch.pt')
         # Step 5: Backward pass
         loss.backward()
         optimizer.step()
@@ -307,13 +312,17 @@ if __name__ == "__main__":
     device = get_device()
     logger.info(f"Device used: {device}")
     # Prepare the qm9 dataset
-    datamodule, dataset_infos, domain_features = load_qm9(qm9_config)
+    datamodule, dataset_infos, extra_features, domain_features = load_qm9(qm9_config)
     dataset_infos.compute_input_output_dims(
-        datamodule=datamodule, domain_features=domain_features
+        datamodule=datamodule, extra_features=extra_features, domain_features=domain_features
     )
     # Define the model
     model = GraphStatFlow_Simplex(config, dataset_infos, domain_features, device).to(device)
 
+    # Load epoch 13 model for debugging
+    # state_dict = torch.load('model_dicts/catflow_best.pt')
+    # model.load_state_dict(state_dict)
+    
     parser = argparse.ArgumentParser("catflow_script")
     parser.add_argument(
         "mode", help="1: inference mode, other int: training mode", type=int

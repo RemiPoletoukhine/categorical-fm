@@ -47,6 +47,8 @@ except ImportError:
     print('[WARNING] scipy not installed, OT not available')
     linear_sum_assignment = None
 
+
+
 def sample_simplex(*sizes, device='cpu', eps=1e-4):
     """
     Uniformly sample from a simplex.
@@ -284,32 +286,29 @@ class GraphStatFlow(nn.Module, ABC):
         # Compute extra data, same as in the functuion in catflow.py "compute_extra_data"
         extra_data = self.domain_features(noisy_data)
 
-
-
         ty = noisy_data["t"].unsqueeze(-1)
         extra_data.y = torch.cat((extra_data.y, ty), dim=1)
 
-        pt.X = torch.cat((noisy_data["X_t"], extra_data.X), dim=2).float()
-        pt.E = torch.cat((noisy_data["E_t"], extra_data.E), dim=3).float()
-        pt.y = torch.hstack((noisy_data["y_t"], extra_data.y)).float()
-
+        x_extra = torch.cat((noisy_data["X_t"], extra_data.X), dim=2).float()
+        e_extra = torch.cat((noisy_data["E_t"], extra_data.E), dim=3).float()
+        y_extra = torch.hstack((noisy_data["y_t"], extra_data.y)).float()
 
         # embed the timestep using the sinusoidal positional encoding
         t_embedded_nodes = timestep_embedding(
-            t, dim=pt.X.shape[-1]
+            t, dim=x_extra.shape[-1]
         )  # Shape: (batch_size, num_classes_nodes)
         t_embedded_edges = timestep_embedding(
-            t, dim=pt.E.shape[-1]
+            t, dim=e_extra.shape[-1]
         )  # Shape: (batch_size, num_classes_edges)
 
         # print(t_embedded_nodes.size(), "t_embedded_nodes")
         # print(t_embedded_edges.size(), "t_embedded_edges")
         # add time embedding to the input across the class feature dimension
-        pt.X += einops.rearrange(t_embedded_nodes, "b c -> b 1 c")
-        pt.E += einops.rearrange(t_embedded_edges, "b c -> b 1 1 c")
+        x_extra += einops.rearrange(t_embedded_nodes, "b c -> b 1 c")
+        e_extra += einops.rearrange(t_embedded_edges, "b c -> b 1 1 c")
 
 
-        return pt
+        return PlaceHolder(X=x_extra, E=e_extra, y=y_extra)
 
 
     def forward(self, t, pt, node_mask, *cond_args):
@@ -325,7 +324,7 @@ class GraphStatFlow(nn.Module, ABC):
 
         # Interpolant with molecular features is returned
         pt_mol = self.pre_forward(t, pt, node_mask)
-
+        pt_mol.mask(node_mask)
         ph_vf = self.encoder(pt_mol.X, pt_mol.E, pt_mol.y, node_mask)
         # print(ph_vf.X.size())
         # print(ph_vf.E.size())
@@ -355,10 +354,6 @@ class GraphStatFlow(nn.Module, ABC):
         :return: loss
         """
 
-
-
-
-
         if data.edge_index.numel() == 0:
             logger.info("Found a batch with no edges. Skipping.")
             return
@@ -378,41 +373,47 @@ class GraphStatFlow(nn.Module, ABC):
 
         self.data_dims[0] = [x_1.size()[1:-1][0],]
         self.data_dims[1] = list(e_1.size()[1:-1])
-        # print(self.data_dims[1])
         self.total_data_dim = [torch.LongTensor(data_dim).prod().item() for data_dim in self.data_dims]
 
 
-        noise = [0,0]
-        # ts = [0,0]
-        pt = [0,0]
         vf = [0,0]
-        ps = [x_1, e_1]
         t = torch.rand(x_1.size(0), device=device) * self.max_t
-        for i,p in enumerate(ps):
-            noise[i] = self.sample_prior(*p.size(), device=device)
-            # ts[i] = torch.rand(p.size(0), device=p.device) * self.max_t
-            
-            if self.ot:
-                noise[i], p, cond_args = self.batch_ot(noise[i], p, cond_args)
 
-            # pt[i], vf[i] = self.vecfield(self.preprocess(noise[i]), self.preprocess(p), ts[i][:, None], self.eps)
-            pt[i], vf[i] = self.vecfield(self.preprocess(noise[i]), self.preprocess(p), t[:, None], self.eps)
-        pt.append(y_1)
-        ph_pt = PlaceHolder(*pt)
-        # print(pt[0].size(), ph_pt.X.size())
-        # print([p.size() for p in pt])
-        # print(ph_pt.X.size(), ph_pt.E.size(), ph_pt.y.size())
-        ph_pred_vf = self(t, ph_pt, node_mask, *cond_args)
 
-        pred_vf = [ph_pred_vf[0], ph_pred_vf[1]] # predicted vector field for X and E respectively
-        loss = 0
-        for i in range(2):
-            if ps[i]==None: continue
-            # print(vf[i].size(), "vfsize")
-            # print(pred_vf[i].size(), "predsize")
-            # print(i)
-            loss += self.norm2(pt[i], pred_vf[i].view(-1, *tuple(self.data_dims[i]), self.n_class[i]) - vf[i], self.eps).mean()
-        # print(loss/2)
+        noise = PlaceHolder(X=self.sample_prior(x_1.size()[0], *self.data_dims[0], self.n_class[0], device=device), 
+                            E=self.sample_prior(e_1.size()[0], *self.data_dims[1], self.n_class[1], device=device), 
+                            y=y_1)
+
+        if self.ot:
+            noise.X, x_1, cond_args = self.batch_ot(noise.X, x_1, cond_args)
+            noise.E, e_1, cond_args = self.batch_ot(noise.E, e_1, cond_args)
+
+
+        noise.X, vf[0] = self.vecfield(self.preprocess(noise.X), self.preprocess(x_1), t[:, None], self.eps)
+        noise.E, vf[1] = self.vecfield(self.preprocess(noise.E), self.preprocess(e_1), t[:, None], self.eps)
+
+        # noise.X = noise.X.view(-1, *self.data_dims[0], self.n_class[0])
+        # noise.E = noise.E.view(-1, *self.data_dims[1], self.n_class[1])
+
+        upper_triangular_mask = torch.zeros_like(noise.E)
+        indices = torch.triu_indices(row=noise.E.size(1), col=noise.E.size(2), offset=1)
+        upper_triangular_mask[:, indices[0], indices[1], :] = 1
+
+        noise.E = noise.E * upper_triangular_mask
+        noise.E = noise.E + torch.transpose(noise.E, 1, 2)
+
+        assert (noise.E == torch.transpose(noise.E, 1, 2)).all()
+
+        noise = noise.mask(node_mask)
+
+
+        pred_vf = self(t, noise, node_mask, *cond_args)
+
+
+        loss = (self.norm2(noise.X, pred_vf[0].view(-1, *tuple(self.data_dims[0]), self.n_class[0]) - vf[0], self.eps).mean() 
+                + 
+                self.norm2(noise.E, pred_vf[1].view(-1, *tuple(self.data_dims[1]), self.n_class[1]) - vf[1], self.eps).mean())
+ 
         return loss/2
 
     #################################################
@@ -458,9 +459,6 @@ class GraphStatFlow(nn.Module, ABC):
         :param return_traj: whether to return the whole sampling trajectory
         :return: sampled data points of shape (n_sample, D, n) or (n_steps, n_sample, D, n)
         """
-        x0 = self.preprocess(self.sample_prior(n_sample, self.total_data_dim[0], self.n_class[0], device=device))
-        e0 = self.preprocess(self.sample_prior(n_sample, self.total_data_dim[1], self.n_class[1], device=device))
-        y0 = self.preprocess(self.sample_prior(n_sample, self.n_class[2], device=device))
         if not return_traj:
             n_steps = 1
 
@@ -480,6 +478,25 @@ class GraphStatFlow(nn.Module, ABC):
             .expand(self.config["batch_size"], -1)
         )
         node_mask = (arange < n_nodes.unsqueeze(1)).to(self.device)
+
+
+        noise = PlaceHolder(
+                            X=self.preprocess(self.sample_prior(n_sample, self.total_data_dim[0], self.n_class[0], device=device)), 
+                            E=self.preprocess(self.sample_prior(n_sample, self.total_data_dim[1], self.n_class[1], device=device)), 
+                            y=self.preprocess(self.sample_prior(n_sample, self.n_class[2], device=device))
+                            )
+
+        upper_triangular_mask = torch.zeros_like(noise.E)
+        indices = torch.triu_indices(row=noise.E.size(1), col=noise.E.size(2), offset=1)
+        upper_triangular_mask[:, indices[0], indices[1], :] = 1
+
+        noise.E = noise.E * upper_triangular_mask
+        noise.E = noise.E + torch.transpose(noise.E, 1, 2)
+
+        assert (noise.E == torch.transpose(noise.E, 1, 2)).all()
+
+        noise.mask(node_mask)
+
         # ps = odeint(
         #     lambda t, p: self(t, p, node_mask, *cond_args),
         #     p0,
@@ -487,17 +504,18 @@ class GraphStatFlow(nn.Module, ABC):
         #     atol=1e-5,
         #     rtol=1e-5,
         # )
-        ps = odeint(
+        gen_X, gen_E = odeint(
             lambda t, p: self(t, p, node_mask, *cond_args),
-            x=(x0, e0, y0),
+            x=(noise.X, noise.E, noise.y),
             t0=0.0,
             t1=1.0,
             phi=self.parameters(),
         )
 
-        if return_traj:
-            return self.postprocess(self.proj_x(ps))
-        return self.postprocess(self.proj_x(ps[-1]))
+        # if return_traj:
+        #     return self.postprocess(self.proj_x(ps))
+        # return self.postprocess(self.proj_x(ps[-1]))
+        return gen_X, gen_E
 
     def sample(self, method, num_nodes, n_sample, n_steps, device, *cond_args, return_traj=False):
         """
