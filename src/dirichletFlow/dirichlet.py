@@ -54,23 +54,6 @@ class DirichletFlow(nn.Module):
         #                 nn.ReLU(),
         #                 nn.Linear(args.hidden_dim, self.num_cls))
 
-    def sample_time(self, lambd: torch.tensor = torch.tensor([1.0])) -> torch.tensor:
-        """
-        Function to sample the time step for the CatFlow model.
-
-        Args:
-            lambd (torch.tensor): Rate parameter of the exponential distribution. Default value is 1.0.
-
-        Returns:
-            torch.tensor: Time step. Shape: (batch_size,).
-        """
-        # As in Dirichlet Flow Matching, we sample the time step from Exp(1)
-        return (
-            torch.distributions.exponential.Exponential(lambd)
-            .sample()
-            .expand(self.batch_size)
-        )
-    
     def compute_extra_data(self, noisy_data: dict) -> utils.PlaceHolder:
         """
         Function to compute extra information and append to the network input at every training step (after adding noise)

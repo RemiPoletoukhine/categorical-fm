@@ -85,12 +85,13 @@ if __name__ == "__main__":
     print('ab_proj2.sum(-1)', ab_proj2.sum(-1))
     print('ab_proj2', ab_proj2)
 
-def sample_cond_prob_path(seq, alphabet_size):
+def sample_cond_prob_path(seq, alphabet_size, alphas):
     B, L,n = seq.shape
 
-    #seq_one_hot = torch.nn.functional.one_hot(seq, num_classes=alphabet_size)
-    # dirichlet sampling 
-    alphas = torch.from_numpy(1 + scipy.stats.expon().rvs(size=B) * 2).to(seq.device).float()
+    #sampling node and edge with same t so that they are sampled from same dirichlet distribution. 
+    if alphas is None: 
+        alphas = torch.from_numpy(1 + scipy.stats.expon().rvs(size=B) * 2).to(seq.device).float()
+
     alphas_ = torch.ones(B, L, alphabet_size, device=seq.device)
     alphas_ = alphas_ + seq * (alphas[:,None,None] - 1)
     xt = torch.distributions.Dirichlet(alphas_).sample()

@@ -86,12 +86,12 @@ def step_forward(
     if optimizer:
         optimizer.zero_grad()
     # CatFlow forward pass:
-    # Step 1: Sample t ~ U[0, 1], x ~ N(0, I), e ~ N(0, I)
-    x_t,t = sample_cond_prob_path(x_1, config["n_node_classes"])  
+    # Step 1: Sample t , x , e 
+    x_t,t = sample_cond_prob_path(x_1, config["n_node_classes"],None)  
     #x_t, prior_weights_node = expand_simplex(x_t,t)
     B,l,l,n = e_1.shape
     e_1 = e_1.reshape(B,l*l,n)
-    e_t, _ = sample_cond_prob_path(e_1, config["n_edge_classes"])
+    e_t, _ = sample_cond_prob_path(e_1, config["n_edge_classes"],t)
     #e_t, prior_weights_edge = expand_simplex(e_t,t)
     e_t = e_t.reshape(B,l,l,n)
 
