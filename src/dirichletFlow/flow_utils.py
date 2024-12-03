@@ -97,7 +97,7 @@ def sample_cond_prob_path(seq, alphabet_size):
 
     return xt, alphas
 
-def expand_simplex(xt, alphas, prior_pseudocount):
+def expand_simplex(xt, alphas, prior_pseudocount=2):
     prior_weights = (prior_pseudocount / (alphas + prior_pseudocount - 1))[:, None, None]
     return torch.cat([xt * (1 - prior_weights), xt * prior_weights], -1), prior_weights
 

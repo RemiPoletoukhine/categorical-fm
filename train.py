@@ -20,6 +20,7 @@ from src.qm9.extra_features_molecular import ExtraMolecularFeatures
 from src.qm9.extra_features import ExtraFeatures
 from src.qm9 import qm9_dataset
 from logger import set_logger
+from src.dirichletFlow.flow_utils import expand_simplex
 
 
 def load_qm9(qm9_config):
@@ -52,6 +53,7 @@ def step_forward(
     data,
     criterion: TrainLossDiscrete,
     device: torch.device,
+    config: dict
 ):
     """
     Perform a forward pass of the model and compute the loss.
@@ -86,22 +88,22 @@ def step_forward(
     # CatFlow forward pass:
     # Step 1: Sample t ~ U[0, 1], x ~ N(0, I), e ~ N(0, I)
     x_t,t = sample_cond_prob_path(x_1, config["n_node_classes"])  
+    #x_t, prior_weights_node = expand_simplex(x_t,t)
     B,l,l,n = e_1.shape
     e_1 = e_1.reshape(B,l*l,n)
     e_t, _ = sample_cond_prob_path(e_1, config["n_edge_classes"])
+    #e_t, prior_weights_edge = expand_simplex(e_t,t)
     e_t = e_t.reshape(B,l,l,n)
-    # t = model.sample_time(batch_size)
-    # sampled = model.sample_noise(x=x_1, e=e_1, y=data.y, node_mask=node_mask)
-    # x_0, e_0, y_0 = sampled.X.to(device), sampled.E.to(device), sampled.y.to(device)
-    # Step 2: Compute noisy data x_t from the sampled noise x_0 using linearity assumption
-    # tau_y, tau_x, tau_e = (
-    #     einops.rearrange(t, "b -> b 1"),
-    #     einops.rearrange(t, "b -> b 1 1"),
-    #     einops.rearrange(t, "b -> b 1 1 1"),
-    # )
-    # x_t = tau_x * x_1 + (1 - tau_x) * x_0
-    # e_t = tau_e * e_1 + (1 - tau_e) * e_0
-    # y_t = tau_y * y_1 + (1 - tau_y) * y_0
+
+    # Need to take care of symmetrical property of edges.
+    upper_triangular_mask = torch.zeros_like(e_t)
+    indices = torch.triu_indices(row=e_t.size(1), col=e_t.size(2), offset=1)
+    upper_triangular_mask[:, indices[0], indices[1], :] = 1
+
+    e_t = e_t * upper_triangular_mask
+    e_t = e_t + torch.transpose(e_t, 1, 2)
+
+    assert (e_t == torch.transpose(e_t, 1, 2)).all()
     # Perform masking
     z_t = PlaceHolder(X=x_t, E=e_t, y=y_1).type_as(x_t).mask(node_mask)
     noisy_data = {
@@ -139,6 +141,7 @@ def train_epoch(
     criterion: TrainLossDiscrete,
     ema: ExponentialMovingAverage,
     device: torch.device,
+    config: dict
 ):
     """
     Train the model for one epoch.
@@ -155,7 +158,7 @@ def train_epoch(
     total_loss = 0
     for data in tqdm(dataloader):
         # Steps 1-4: Forward pass
-        loss = step_forward(model, optimizer, data, criterion, device)
+        loss = step_forward(model, optimizer, data, criterion, device,config)
         # Step 5: Backward pass
         loss.backward()
         optimizer.step()
@@ -167,12 +170,12 @@ def train_epoch(
     return total_loss / len(dataloader)
 
 
-def validate_epoch(model, dataloader, criterion, device):
+def validate_epoch(model, dataloader, criterion, device,config):
     model.eval()
     total_loss = 0
     with torch.no_grad():
         for data in tqdm(dataloader):
-            loss = step_forward(model, None, data, criterion, device)
+            loss = step_forward(model, None, data, criterion, device,config)
             total_loss += loss.item()
 
     return total_loss / len(dataloader)
@@ -209,14 +212,14 @@ def training(
     early_stopper = EarlyStopper(patience=3, min_delta=0.005)
     for epoch in range(config["n_epochs"]):
         train_loss = train_epoch(
-            model, optimizer, train_dataloader, criterion, ema, device
+            model, optimizer, train_dataloader, criterion, ema, device,config
         )
         writer.add_scalar(
             f"loss/train",
             train_loss,
             (epoch + 1) * len_train_dataloader,
         )
-        val_loss = validate_epoch(model, val_dataloader, criterion, device)
+        val_loss = validate_epoch(model, val_dataloader, criterion, device,config)
         writer.add_scalar(
             f"loss/validation",
             val_loss,
