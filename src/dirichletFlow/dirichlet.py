@@ -121,65 +121,16 @@ class DirichletFlow(nn.Module):
         time_emb_e = F.relu(self.time_embedder_edge(t))
         x += einops.rearrange(time_emb_n, "b c -> b 1 c")
         e += einops.rearrange(time_emb_e, "b c -> b 1 1 c")
-        # x = x + time_emb_n[:,None,:]
-        # e = e + time_emb_e[:,None,:]
 
         #return self.cls_head(feat)
 
         return self.backbone_model(
             X=x,
             E=e,
-            # dummy y
             y=y,
             node_mask=node_mask,
         )
-
-    def vector_field(
-        self,
-        t: float,
-        X_0: torch.tensor,
-        E_0: torch.tensor,
-        y_0: torch.tensor,
-        node_mask: torch.tensor,
-    ) -> torch.tensor:
-        """
-        Function that returns the vector field of the CatFlow model for a given timestamp.
-
-        Args:
-            t (float): Time step.
-            X_0 (torch.tensor): Initial node features. Shape: (batch_size, num_nodes, num_node_classes).
-            E_0 (torch.tensor): Initial edge features. Shape: (batch_size, num_nodes, num_nodes, num_edge_classes).
-            y_0 (torch.tensor): Initial global features. Shape: (batch_size, y_emb).
-            node_mask (torch.tensor): Node mask. Shape: (batch_size, num_nodes).
-
-        Returns:
-            torch.tensor: Vector field. Shape: (batch_size, num_nodes + (num_nodes - 1)**2, num_classes + 1).
-        """
-        # track progress of the integration. Unfortunately, that's the prettiest way (of the simpler ones) to do it
-        print(f"Current step: {t}")
-        t_expanded = t.expand(X_0.shape[0])
-        noisy_data = {
-            "X_t": X_0,
-            "E_t": E_0,
-            "y_t": y_0,
-            "t": t_expanded,
-            "node_mask": node_mask,
-        }
-        extra_data = self.compute_extra_data(noisy_data=noisy_data)
-
-        # prediction of the vector field at time t: forward pass of the backbone model
-        inferred_state = self.forward(noisy_data, extra_data, node_mask)
-
-        node_repr = inferred_state.X
-        edge_repr = inferred_state.E
-        y_repr = inferred_state.y
-
-        node_vector_field = (node_repr - noisy_data["X_t"]) / (1 - t + self.eps)
-        edge_vector_field = (edge_repr - noisy_data["E_t"]) / (1 - t + self.eps)
-        y_vector_field = (y_repr - noisy_data["y_t"]) / (1 - t + self.eps)
-
-        return node_vector_field, edge_vector_field, y_vector_field
-
+    
     def flow_inference(self,B,num_nodes,t,s,xt,flow_probs,eye,condflow):
         if not torch.allclose(flow_probs.sum(2), torch.ones((B, num_nodes), device=self.device), atol=1e-4) or not (flow_probs >= 0).all():
                 print(f'WARNING: flow_probs.min(): {flow_probs.min()}. Some values of flow_probs do not lie on the simplex. There are we are {(flow_probs<0).sum()} negative values in flow_probs of shape {flow_probs.shape} that are negative. We are projecting them onto the simplex.')
