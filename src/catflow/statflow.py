@@ -49,7 +49,7 @@ except ImportError:
 
 
 
-def sample_simplex(*sizes, device='cpu', eps=1e-4):
+def sample_simplex(*sizes, device, eps=1e-4):
     """
     Uniformly sample from a simplex.
     :param sizes: sizes of the Tensor to be returned
@@ -263,7 +263,6 @@ class GraphStatFlow(nn.Module, ABC):
         t_reshaped = t.view(-1, *([1]*(len(p.size())-1)))
         pt = cls.interpolate(p, q, t_reshaped, eps)
 
-        # print(pt.size(), 'vecfield')
 
         vf = cls.log(pt, q, eps) / (1 - t_reshaped)
         return pt, vf
@@ -274,14 +273,11 @@ class GraphStatFlow(nn.Module, ABC):
 
 
     # Added utility function for the forward
-    def pre_forward(self, t, pt, node_mask):
+    def pre_forward(self, t, X, E, y, node_mask):
 
         # Instantiate a noisy data dict needed for computations
-        t_expanded = t.expand(pt.X.shape[0])
-        noisy_data = {"X_t": pt.X, "E_t": pt.E, "y_t": pt.y, "t": t_expanded, "node_mask": node_mask}
-
-        # print(pt.X.size(), "pre_forward  pt")
-        # print(noisy_data["X_t"].size(), "pre_forward  noisy")
+        t_expanded = t.expand(X.shape[0])
+        noisy_data = {"X_t": X, "E_t": E, "y_t": y, "t": t_expanded, "node_mask": node_mask}
 
         # Compute extra data, same as in the functuion in catflow.py "compute_extra_data"
         extra_data = self.domain_features(noisy_data)
@@ -293,46 +289,31 @@ class GraphStatFlow(nn.Module, ABC):
         e_extra = torch.cat((noisy_data["E_t"], extra_data.E), dim=3).float()
         y_extra = torch.hstack((noisy_data["y_t"], extra_data.y)).float()
 
-        # # embed the timestep using the sinusoidal positional encoding
-        # t_embedded_nodes = timestep_embedding(
-        #     t, dim=x_extra.shape[-1]
-        # )  # Shape: (batch_size, num_classes_nodes)
-        # t_embedded_edges = timestep_embedding(
-        #     t, dim=e_extra.shape[-1]
-        # )  # Shape: (batch_size, num_classes_edges)
-
-        # print(t_embedded_nodes.size(), "t_embedded_nodes")
-        # print(t_embedded_edges.size(), "t_embedded_edges")
-        # add time embedding to the input across the class feature dimension
-        # x_extra += einops.rearrange(t_embedded_nodes, "b c -> b 1 c")
-        # e_extra += einops.rearrange(t_embedded_edges, "b c -> b 1 1 c")
-
-
         return PlaceHolder(X=x_extra, E=e_extra, y=y_extra)
 
 
-    def forward(self, t, pt, node_mask, *cond_args):
+    def forward(self, t, X,E,y, node_mask, *cond_args):
         """
         predict vector field at time t
         :param t: timestep between 0 and 1, Tensor of shape (B,) or a single float (Changed to list of tensors of shape (B,))
         :param pt: interpolant at timestep t, Tensor of shape (B, D, n) (Changed to PlaceHolder object of interpolants)
         :return: predicted vector field, Tensor of shape (B, D, n)
         """
-        # for t in ts:
+
         if t.dim() == 0:
             t = t.unsqueeze(0)
 
         # Interpolant with molecular features is returned
-        pt_mol = self.pre_forward(t, pt, node_mask)
-        # pt_mol.mask(node_mask) # TODO: Remove
+        pt_mol = self.pre_forward(t, X, E, y, node_mask)
+
+        # Pass interpolant with mask through encoder and get result
         ph_vf = self.encoder(pt_mol.X, pt_mol.E, pt_mol.y, node_mask)
-        # print(ph_vf.X.size())
-        # print(ph_vf.E.size())
+
         vf = [ph_vf.X.view(-1, self.total_data_dim[0], self.n_class[0]),
             ph_vf.E.view(-1, self.total_data_dim[1], self.n_class[1])]
 
         # Projections onto the tangent space at the interpolant pt for X and E respectively
-        return self.proj_vf(vf[0], pt), self.proj_vf(vf[1], pt) 
+        return self.proj_vf(vf[0], X), self.proj_vf(vf[1], E) 
 
     def batch_ot(self, p, q, cond_args):
         """
@@ -379,10 +360,9 @@ class GraphStatFlow(nn.Module, ABC):
         vf = [0,0]
         t = torch.rand(x_1.size(0), device=device) * self.max_t
 
-
         noise = PlaceHolder(X=self.sample_prior(x_1.size()[0], *self.data_dims[0], self.n_class[0], device=device), 
                             E=self.sample_prior(e_1.size()[0], *self.data_dims[1], self.n_class[1], device=device), 
-                            y=y_1)
+                            y=torch.empty((y_1.size()[0], self.n_class[2])).to(device))
 
         if self.ot:
             noise.X, x_1, cond_args = self.batch_ot(noise.X, x_1, cond_args)
@@ -391,9 +371,6 @@ class GraphStatFlow(nn.Module, ABC):
 
         noise.X, vf[0] = self.vecfield(self.preprocess(noise.X), self.preprocess(x_1), t[:, None], self.eps)
         noise.E, vf[1] = self.vecfield(self.preprocess(noise.E), self.preprocess(e_1), t[:, None], self.eps)
-
-        # noise.X = noise.X.view(-1, *self.data_dims[0], self.n_class[0])
-        # noise.E = noise.E.view(-1, *self.data_dims[1], self.n_class[1])
 
         upper_triangular_mask = torch.zeros_like(noise.E)
         indices = torch.triu_indices(row=noise.E.size(1), col=noise.E.size(2), offset=1)
@@ -407,13 +384,19 @@ class GraphStatFlow(nn.Module, ABC):
         noise = noise.mask(node_mask)
 
 
-        pred_vf = self(t, noise, node_mask, *cond_args)
+        pred_vf = self(t, noise.X, noise.E, noise.y, node_mask.type(torch.bool), *cond_args)
 
 
-        loss = (self.norm2(noise.X, pred_vf[0].view(-1, *tuple(self.data_dims[0]), self.n_class[0]) - vf[0], self.eps).mean() 
-                + 
-                self.norm2(noise.E, pred_vf[1].view(-1, *tuple(self.data_dims[1]), self.n_class[1]) - vf[1], self.eps).mean())
- 
+        flat_noise = torch.cat((noise.X.flatten(start_dim=1), noise.E.flatten(start_dim=1)), dim=1)
+        diff_x = pred_vf[0].view(-1, *tuple(self.data_dims[0]), self.n_class[0]) - vf[0]
+        diff_e = pred_vf[1].view(-1, *tuple(self.data_dims[1]), self.n_class[1]) - vf[1]
+        flat_diff = torch.cat((diff_x.flatten(start_dim=1), diff_e.flatten(start_dim=1)), dim=1)
+        loss = self.norm2(flat_noise, flat_diff, self.eps).mean() 
+
+        # Old loss
+        # loss = (self.norm2(noise.X, pred_vf[0].view(-1, *tuple(self.data_dims[0]), self.n_class[0]) - vf[0], self.eps).mean() 
+        #         + 
+        #         self.norm2(noise.E, pred_vf[1].view(-1, *tuple(self.data_dims[1]), self.n_class[1]) - vf[1], self.eps).mean())
         return loss/2
 
     #################################################
@@ -447,6 +430,7 @@ class GraphStatFlow(nn.Module, ABC):
             return self.postprocess(ps)
         return self.postprocess(p)
 
+
     @torch.no_grad()
     def sample_ode(self, num_nodes, n_sample, n_steps, device, *cond_args, return_traj=False):
         """
@@ -457,65 +441,61 @@ class GraphStatFlow(nn.Module, ABC):
         :param device: device to put the Tensor on
         :param cond_args: optional conditional arguments
         :param return_traj: whether to return the whole sampling trajectory
-        :return: sampled data points of shape (n_sample, D, n) or (n_steps, n_sample, D, n)
+        :return: list of length n_sample of sampled nodes X and edges E as data points of shape (D, n) or and (n_steps, D, n) for data shape D (X.D or E.D)
         """
-        if not return_traj:
-            n_steps = 1
-
+        samples = []
+        # if not return_traj:
+        #     n_steps = 1
+        self.config['batch_size'] = n_sample
         if num_nodes is None:
-            n_nodes = self.node_dist.sample_n(self.config["batch_size"], self.device)
+            n_nodes = self.node_dist.sample_n(self.config["batch_size"], device)
         elif type(num_nodes) == int:
             n_nodes = num_nodes * torch.ones(
-                self.config["batch_size"], device=self.device, dtype=torch.int
+                self.config["batch_size"], device=device, dtype=torch.int
             )
         else:
             assert isinstance(num_nodes, torch.Tensor)
             n_nodes = num_nodes
         n_max = torch.max(n_nodes).item()
         arange = (
-            torch.arange(torch.max(n_max).item(), device=self.device)
+            torch.arange(n_max, device=device)
             .unsqueeze(0)
             .expand(self.config["batch_size"], -1)
         )
-        node_mask = (arange < n_nodes.unsqueeze(1)).to(self.device)
+        node_mask = (arange < n_nodes.unsqueeze(1)).to(device)
 
+        
+        for s in range(n_sample):
+            noise = PlaceHolder(
+                                X=self.preprocess(self.sample_prior(n_sample, int(n_nodes[s]), self.n_class[0], device=device)), 
+                                E=self.preprocess(self.sample_prior(n_sample, int(n_nodes[s]), int(n_nodes[s]), self.n_class[1], device=device)), 
+                                y=self.preprocess(self.sample_prior(n_sample, self.n_class[2], device=device))
+                                )
 
-        noise = PlaceHolder(
-                            X=self.preprocess(self.sample_prior(n_sample, self.total_data_dim[0], self.n_class[0], device=device)), 
-                            E=self.preprocess(self.sample_prior(n_sample, self.total_data_dim[1], self.n_class[1], device=device)), 
-                            y=self.preprocess(self.sample_prior(n_sample, self.n_class[2], device=device))
-                            )
+            upper_triangular_mask = torch.zeros_like(noise.E)
+            indices = torch.triu_indices(row=noise.E.size(1), col=noise.E.size(2), offset=1)
+            upper_triangular_mask[:, indices[0], indices[1], :] = 1
 
-        upper_triangular_mask = torch.zeros_like(noise.E)
-        indices = torch.triu_indices(row=noise.E.size(1), col=noise.E.size(2), offset=1)
-        upper_triangular_mask[:, indices[0], indices[1], :] = 1
+            noise.E = noise.E * upper_triangular_mask
+            noise.E = noise.E + torch.transpose(noise.E, 1, 2)
 
-        noise.E = noise.E * upper_triangular_mask
-        noise.E = noise.E + torch.transpose(noise.E, 1, 2)
+            assert (noise.E == torch.transpose(noise.E, 1, 2)).all()
 
-        assert (noise.E == torch.transpose(noise.E, 1, 2)).all()
+            noise.mask(node_mask)
 
-        noise.mask(node_mask)
-
-        # ps = odeint(
-        #     lambda t, p: self(t, p, node_mask, *cond_args),
-        #     p0,
-        #     t=torch.linspace(0, 1, n_steps + 1, device=device, dtype=torch.float),
-        #     atol=1e-5,
-        #     rtol=1e-5,
-        # )
-        gen_X, gen_E = odeint(
-            lambda t, p: self(t, p, node_mask, *cond_args),
-            x=(noise.X, noise.E, noise.y),
-            t0=0.0,
-            t1=1.0,
-            phi=self.parameters(),
-        )
+            gen_X, gen_E, _= odeint(
+                lambda t, x, e, y: self(t, x, e, y, node_mask, *cond_args),
+                x=(noise.X, noise.E, noise.y),
+                t0=0.0,
+                t1=1.0,
+                phi=self.parameters(),
+            )
+            samples.append((gen_X, gen_E))
 
         # if return_traj:
         #     return self.postprocess(self.proj_x(ps))
         # return self.postprocess(self.proj_x(ps[-1]))
-        return gen_X, gen_E
+        return samples
 
     def sample(self, method, num_nodes, n_sample, n_steps, device, *cond_args, return_traj=False):
         """
