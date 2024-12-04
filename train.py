@@ -30,21 +30,6 @@ def load_qm9(qm9_config):
     domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos)
 
     return datamodule, dataset_infos, extra_features, domain_features
-# def prepare_dataloaders(
-#     batch_size: int,
-#     path_to_train: str = "qm9/train_data_processed.pt",
-#     path_to_val: str = "qm9/val_data_processed.pt",
-# ) -> tuple[DataLoader, DataLoader]:
-
-#     # Load your processed data
-#     train_data = torch.load(path_to_train, weights_only=True)
-#     val_data = torch.load(path_to_val, weights_only=True)
-
-#     # Create the DataLoaders
-#     train_dataloader = create_dataloader(train_data, batch_size=batch_size)
-#     val_dataloader = create_dataloader(val_data, batch_size=batch_size)
-
-#     return train_dataloader, val_dataloader
 
 
 def step_forward(
@@ -250,19 +235,6 @@ def training(
     return 0
 
 
-def inference(model, config, device):
-    # TODO add dirichlet_flow_inference from dna_module.py
-    # Step 1: x ~ N(0, I), e ~ N(0, I) and initialize the node mask
-    x = model.sample_noise(kind="node", num_nodes=config["n_nodes"]).to(device)
-    e = model.sample_noise(kind="edge", num_nodes=config["n_nodes"]).to(device)
-    node_mask = torch.ones(config["batch_size"], config["n_nodes"]).to(device)
-    # Step 2: initialize the state
-    init_state = (x, e, node_mask)
-    # Step 3: sample from the model
-    nodes_repr, edges_repr = model.sampling(init_state)
-
-    return nodes_repr, edges_repr
-
 
 if __name__ == "__main__":
     logger = set_logger("train")
@@ -281,23 +253,6 @@ if __name__ == "__main__":
     # Define the model
     model = DirichletFlow(config,dataset_infos, domain_features, device).to(device)
 
-    # parser = argparse.ArgumentParser("catflow_script")
-    # parser.add_argument(
-    #     "mode", help="1: inference mode, other int: training mode", type=int
-    # )
-    # args = parser.parse_args()
-    #if args.mode:
-        # start = datetime.now()
-        # logging.info("Starting the generation of the graphs.")
-        # nodes_repr, edges_repr = inference(model, config, device)
-        # os.makedirs("generated_graphs", exist_ok=True)
-        # torch.save(nodes_repr, "generated_graphs/nodes_repr.pt")
-        # torch.save(edges_repr, "generated_graphs/edges_repr.pt")
-        # logging.info(
-        #     f"Graphs generated successfully in: {datetime.now() - start} seconds."
-        # )
-    #else:
-    #logging.info("Starting the training.")
     # Define the optimizer, scheduler and loss function
     logger.info("Starting the training.")
     if config["optimizer"] == "adamw":

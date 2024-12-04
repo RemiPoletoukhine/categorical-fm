@@ -151,8 +151,6 @@ class DirichletFlow(nn.Module):
         Function to sample a new batch of graphs following the learned vector field.
 
         Args:
-            t_0 (float): Initial time step. Default value is 0.0.
-            t_1 (float): Final time step. Default value is 1.0.
             num_nodes (int): Number of nodes for the sampled graphs. Default value is None.
 
         Returns:
