@@ -311,7 +311,7 @@ class GraphStatFlow(nn.Module, ABC):
 
         vf = [ph_vf.X.view(-1, self.total_data_dim[0], self.n_class[0]),
             ph_vf.E.view(-1, self.total_data_dim[1], self.n_class[1]),
-            ph_vf.y.view(-1, self.n_class[2])]
+            ph_vf.y]
 
         # Projections onto the tangent space at the interpolant pt for X and E respectively
         return self.proj_vf(vf[0], X), self.proj_vf(vf[1], E), self.proj_vf(vf[2], X)

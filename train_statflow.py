@@ -180,7 +180,7 @@ def train_epoch(
 
         # Steps 1-4: Forward pass
         try:
-            loss = model.get_loss_ce(data, logger, device, None)
+            loss = model.get_loss_CE(data, logger, device, None)
         except AssertionError as e:
             torch.save(model.state_dict(), 'fuckedmodel3.pt')
             torch.save(data, 'fuckedbatch3.pt')
@@ -217,7 +217,7 @@ def validate_epoch(
     total_loss = 0
     with torch.no_grad():
         for data in tqdm(dataloader):
-            loss = model.get_loss_ce(data, logger, device, None)
+            loss = model.get_loss_CE(data, logger, device, None)
             total_loss += loss.item()
 
     return total_loss / len(dataloader)
