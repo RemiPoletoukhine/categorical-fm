@@ -274,7 +274,8 @@ class NodeEdgeBlock(nn.Module):
             assert_correctly_masked(newE, e_mask1 * e_mask2)
         except AssertionError:
             torch.save({'out': out, 'newE': newE, 'emask1': e_mask1, 'emask2': e_mask2}, 'maskinfo.pt')
-        assert_correctly_masked(newE, e_mask1 * e_mask2)
+            raise Exception('Assertion failed in line 274, Assertion: assert_correctly_masked()')
+        
         # Compute attentions. attn is still (bs, n, n, n_head, df)
         softmax_mask = e_mask2.expand(-1, n, -1, self.n_head)  # bs, 1, n, 1
         attn = masked_softmax(Y, softmax_mask, dim=2)  # bs, n, n, n_head

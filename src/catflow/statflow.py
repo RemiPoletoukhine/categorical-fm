@@ -16,7 +16,7 @@ from src.qm9 import qm9_dataset
 import src.catflow.utils as utils
 from src.catflow.transformer_model import GraphTransformer
 from src.qm9.extra_features_molecular import ExtraMolecularFeatures
-
+from src.metrics.metrics import TrainLossDiscrete
 
 from src.catflow.utils import (
     timestep_embedding,
@@ -310,10 +310,11 @@ class GraphStatFlow(nn.Module, ABC):
         ph_vf = self.encoder(pt_mol.X, pt_mol.E, pt_mol.y, node_mask)
 
         vf = [ph_vf.X.view(-1, self.total_data_dim[0], self.n_class[0]),
-            ph_vf.E.view(-1, self.total_data_dim[1], self.n_class[1])]
+            ph_vf.E.view(-1, self.total_data_dim[1], self.n_class[1]),
+            ph_vf.y.view(-1, self.n_class[2])]
 
         # Projections onto the tangent space at the interpolant pt for X and E respectively
-        return self.proj_vf(vf[0], X), self.proj_vf(vf[1], E) 
+        return self.proj_vf(vf[0], X), self.proj_vf(vf[1], E), self.proj_vf(vf[2], X)
 
     def batch_ot(self, p, q, cond_args):
         """
@@ -387,18 +388,85 @@ class GraphStatFlow(nn.Module, ABC):
         pred_vf = self(t, noise.X, noise.E, noise.y, node_mask.type(torch.bool), *cond_args)
 
 
-        flat_noise = torch.cat((noise.X.flatten(start_dim=1), noise.E.flatten(start_dim=1)), dim=1)
-        diff_x = pred_vf[0].view(-1, *tuple(self.data_dims[0]), self.n_class[0]) - vf[0]
-        diff_e = pred_vf[1].view(-1, *tuple(self.data_dims[1]), self.n_class[1]) - vf[1]
-        flat_diff = torch.cat((diff_x.flatten(start_dim=1), diff_e.flatten(start_dim=1)), dim=1)
-        loss = self.norm2(flat_noise, flat_diff, self.eps).mean() 
+        # flat_noise = torch.cat((noise.X.flatten(start_dim=1), noise.E.flatten(start_dim=1)), dim=1)
+        # diff_x = pred_vf[0].view(-1, *tuple(self.data_dims[0]), self.n_class[0]) - vf[0]
+        # diff_e = pred_vf[1].view(-1, *tuple(self.data_dims[1]), self.n_class[1]) - vf[1]
+        # flat_diff = torch.cat((diff_x.flatten(start_dim=1), diff_e.flatten(start_dim=1)), dim=1)
+        # loss = self.norm2(flat_noise, flat_diff, self.eps).mean() 
 
         # Old loss
-        # loss = (self.norm2(noise.X, pred_vf[0].view(-1, *tuple(self.data_dims[0]), self.n_class[0]) - vf[0], self.eps).mean() 
-        #         + 
-        #         self.norm2(noise.E, pred_vf[1].view(-1, *tuple(self.data_dims[1]), self.n_class[1]) - vf[1], self.eps).mean())
+        loss = (self.norm2(noise.X, pred_vf[0].view(-1, *tuple(self.data_dims[0]), self.n_class[0]) - vf[0], self.eps).mean() 
+                + 
+                self.norm2(noise.E, pred_vf[1].view(-1, *tuple(self.data_dims[1]), self.n_class[1]) - vf[1], self.eps).mean())
         return loss/2
+    def get_loss_CE(self, data, logger, device, *cond_args):
+        """
+        Compute the Riemannian flow matching loss.
+        :param data: the data from the dataloader
+        :param cond_args: optional conditional arguments
+        :return: loss
+        """
 
+        if data.edge_index.numel() == 0:
+            logger.info("Found a batch with no edges. Skipping.")
+            return
+        data = data.to(device)
+        # Get the dense representation of the graph
+        dense_data, node_mask = to_dense(
+            data.x, data.edge_index, data.edge_attr, data.batch
+        )
+        dense_data = dense_data.mask(node_mask)
+        x_1, e_1, node_mask = (
+            dense_data.X.to(device),
+            dense_data.E.to(device),
+            node_mask.to(device),
+        )
+        y_1 = data.y.to(device)
+
+
+        self.data_dims[0] = [x_1.size()[1:-1][0],]
+        self.data_dims[1] = list(e_1.size()[1:-1])
+        self.total_data_dim = [torch.LongTensor(data_dim).prod().item() for data_dim in self.data_dims]
+
+
+        vf = [0,0,0]
+        t = torch.rand(x_1.size(0), device=device) * self.max_t
+
+        noise = PlaceHolder(X=self.sample_prior(x_1.size(0), *self.data_dims[0], self.n_class[0], device=device), 
+                            E=self.sample_prior(e_1.size(0), *self.data_dims[1], self.n_class[1], device=device), 
+                            y=torch.empty((y_1.size(0), self.n_class[2])).to(device))
+
+        if self.ot:
+            noise.X, x_1, cond_args = self.batch_ot(noise.X, x_1, cond_args)
+            noise.E, e_1, cond_args = self.batch_ot(noise.E, e_1, cond_args)
+
+
+        noise.X, vf[0] = self.vecfield(self.preprocess(noise.X), self.preprocess(x_1), t[:, None], self.eps)
+        noise.E, vf[1] = self.vecfield(self.preprocess(noise.E), self.preprocess(e_1), t[:, None], self.eps)
+        noise.y, vf[2] = self.vecfield(self.preprocess(noise.y), self.preprocess(y_1), t[:, None], self.eps)
+
+        upper_triangular_mask = torch.zeros_like(noise.E)
+        indices = torch.triu_indices(row=noise.E.size(1), col=noise.E.size(2), offset=1)
+        upper_triangular_mask[:, indices[0], indices[1], :] = 1
+
+        noise.E = noise.E * upper_triangular_mask
+        noise.E = noise.E + torch.transpose(noise.E, 1, 2)
+
+        assert (noise.E == torch.transpose(noise.E, 1, 2)).all()
+
+        noise = noise.mask(node_mask)
+                           
+        pred_vf = self(t, noise.X, noise.E, noise.y, node_mask.type(torch.bool), *cond_args)
+
+        criterion = TrainLossDiscrete(lambda_train=self.config["lambda_train"]).to(device)
+
+        return criterion(masked_pred_X=pred_vf[0],
+                        masked_pred_E=pred_vf[1],
+                        pred_y=pred_vf[2],
+                        true_X=vf[0],
+                        true_E=vf[1],
+                        true_y=vf[2],
+                        log=False,)
     #################################################
     # Sampling                                      #
     #################################################
@@ -483,14 +551,14 @@ class GraphStatFlow(nn.Module, ABC):
 
             noise.mask(node_mask)
 
-            gen_X, gen_E, _= odeint(
+            gen_X, gen_E, gen_y = odeint(
                 lambda t, x, e, y: self(t, x, e, y, node_mask, *cond_args),
                 x=(noise.X, noise.E, noise.y),
                 t0=0.0,
                 t1=1.0,
                 phi=self.parameters(),
             )
-            samples.append((gen_X, gen_E))
+            samples.append((gen_X, gen_E, gen_y))
 
         # if return_traj:
         #     return self.postprocess(self.proj_x(ps))
