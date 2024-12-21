@@ -141,10 +141,10 @@ class CatFlow(nn.Module):
 
         # prediction of the vector field at time t: forward pass of the backbone model
         inferred_state = self.forward(noisy_data, extra_data, node_mask)
-
-        node_repr = inferred_state.X
-        edge_repr = inferred_state.E
-        y_repr = inferred_state.y
+        # during inference, we need to perform softmax (during training, it's done in the cross-entropy loss function)
+        node_repr = F.softmax(inferred_state.X, dim=-1)
+        edge_repr = F.softmax(inferred_state.E, dim=-1)
+        y_repr = F.softmax(inferred_state.y, dim=-1)
 
         node_vector_field = (node_repr - noisy_data["X_t"]) / (1 - t + self.eps)
         edge_vector_field = (edge_repr - noisy_data["E_t"]) / (1 - t + self.eps)

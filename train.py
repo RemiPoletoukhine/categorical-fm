@@ -94,6 +94,18 @@ def step_forward(
         "node_mask": node_mask.type(torch.bool),
         "t": t,
     }
+    # z_t, t = sample_discrete_feature_noise(model.limit_dist, node_mask, t=-1, true_x=x_1.to(torch.device('cpu')), true_e=e_1.to(torch.device('cpu')))
+    
+    # noisy_data = {
+    #     "X_t": z_t.X.to(device),
+    #     "E_t": z_t.E.to(device),
+    #     "y_t": z_t.y.to(device),
+    #     "node_mask": node_mask.type(torch.bool),
+    #     "t": t.to(device),
+    # }
+    # print(z_t.X)
+    # print('-----------------')
+    # print(z_t.E)
     # compute the extra molecular features
     extra_data = model.compute_extra_data(noisy_data=noisy_data)
     # Step 3: Forward pass of the graph transformer
@@ -243,7 +255,7 @@ def training(
             best_epoch = epoch
             # Save the model
             os.makedirs("model_dicts", exist_ok=True)
-            torch.save(model.state_dict(), f"model_dicts/catflow_best.pt")
+            #torch.save(model.state_dict(), f"model_dicts/catflow_best_layer_3_data_100.pt")
         # early stopping if the validation loss does not decrease
         if early_stopper.early_stop(val_loss):
             logger.info("Early stopping triggered.")
