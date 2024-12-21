@@ -7,7 +7,7 @@ test their performance on the graph generation task across unified settings.
 
 ### Swiss Roll on Simplex
 
-To reproduce this toy experiment from [4], use our adaptation of the [original](https://github.com/ccr-cheng/statistical-flow-matching/blob/main/swissroll.ipynb) `swissroll.ipynb` notebook, where we additionally included our implementation of CatFlow [1] with an MLP backbone as in [4].
+To reproduce this toy experiment from [4], use our adaptation of the [original](https://github.com/ccr-cheng/statistical-flow-matching/blob/main/swissroll.ipynb) `swissroll.ipynb` notebook, where we additionally included our implementation of CatFlow [1] with an MLP backbone as in [4]. To reproduce the results, execute the notebook under the [4] repo.
 
 ### QM9: Categorical Generation
 
