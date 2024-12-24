@@ -31,8 +31,19 @@ python train_catflow.py 1
 ```
 In case you want to obtain the corresponding metrics right away, use the `generate.py` script.
 #### Fisher-FM [3, 4]:
-**TBD @ Felix**
-
+The model's code is located in `src/statflow`. 
+* To perform hyperparameter tuning, run:
+```
+python tune_statflow.py
+```
+* To train the model, run: 
+```
+python train_statflow.py 0
+```
+* To generate graphs, run:
+```
+python train_statflow.py 1
+```
 ### QM9: Mixed Continuous and Categorical Generation
 
 As in [3], we perform this series of experiments on the graph net from FlowMol (and its [original implementation](https://github.com/Dunni3/FlowMol)).
