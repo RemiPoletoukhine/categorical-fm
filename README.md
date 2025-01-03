@@ -19,15 +19,15 @@ The model's code is located in the `src/catflow` directory.
 
 * To run hyperparameter tuning, launch:
 ```
-python tune_catflow.py
+python tune.py
 ```
 * To train the model, launch: 
 ```
-python train_catflow.py 0
+python train.py 0
 ```
 * To generate graphs, perform:
 ```
-python train_catflow.py 1
+python train.py 1
 ```
 In case you want to obtain the corresponding metrics right away, use the `generate.py` script.
 #### Fisher-FM [3, 4]:
